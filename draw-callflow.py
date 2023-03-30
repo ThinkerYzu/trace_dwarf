@@ -4,6 +4,7 @@
 #
 # Usage: draw-callflow.py [-f <+caller|~callee>] [-n <levels>]
 #                         [-x <exclude-symbol>]
+#                         [-L <symbol>]
 #                         [-o <output-file>] <database>
 #
 # Options:
@@ -12,6 +13,7 @@
 #   -n <levels>           Number of levels to follow.
 #   -x <exclude-symbol>   Exclude the specified symbol. Stop following the
 #                         symbol.
+#   -L <symbol>           Hightlight the specified symbol.
 #   -o <output-file>      Output file name. If not specified, output to stdout.
 #
 # You can specify multiple -f options to follow multiple call paths.
@@ -41,10 +43,12 @@ import sqlite3
 #
 
 class CallflowNode:
-    def __init__(self, name, tree):
+    def __init__(self, id, name, tree):
+        self.id = id
         self.name = name
         self.tree = tree
         self.children = []
+        self.extra_label = []
         pass
 
     def add_non_existing_child(self, child):
@@ -53,11 +57,14 @@ class CallflowNode:
         self.children.append(child)
         self.tree.symbols[child.name] = child
         return True
+
+    def is_in_set(self, set):
+        return self.name in set or '@' + str(self.id) in set
     pass
 
 class CallflowTree:
-    def __init__(self, name, to_callee):
-        self.root = CallflowNode(name, self)
+    def __init__(self, id, name, to_callee):
+        self.root = CallflowNode(id, name, self)
         self.symbols = {name: self.root}
         self.to_callee = to_callee
         pass
@@ -72,10 +79,21 @@ class CallflowTree:
 
     def draw_to_callee(self, out):
         tasks = [self.root]
+        visited = set()
         while tasks:
             node = tasks.pop()
+            if node.name not in visited and node.extra_label:
+                out.write('"%s" [%s];\n' % (node.name, ','.join(node.extra_label)))
+                pass
             for child in node.children:
-                out.write('"%s" -> "%s";\n' % (node.name, child.name))
+                if child.name not in visited and child.extra_label:
+                    out.write('"%s" [%s];\n' % (child.name, ','.join(child.extra_label)))
+                    pass
+                if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
+                    out.write('"%s" -> "%s" [color=red,weight=2];\n' % (node.name, child.name))
+                else:
+                    out.write('"%s" -> "%s";\n' % (node.name, child.name))
+                    pass
                 tasks.append(child)
                 pass
             pass
@@ -83,9 +101,19 @@ class CallflowTree:
 
     def draw_to_caller(self, out):
         tasks = [self.root]
+        visited = set()
         while tasks:
             node = tasks.pop()
+            if node.name not in visited and node.extra_label:
+                out.write('"%s" [%s];\n' % (node.name, ','.join(node.extra_label)))
+                pass
             for child in node.children:
+                if child.name not in visited and child.extra_label:
+                    out.write('"%s" [%s];\n' % (child.name, ','.join(child.extra_label)))
+                    pass
+                if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
+                    out.write('"%s" -> "%s" [color=red,weight=2];\n' % (child.name, node.name))
+                    pass
                 out.write('"%s" -> "%s";\n' % (child.name, node.name))
                 tasks.append(child)
                 pass
@@ -93,8 +121,14 @@ class CallflowTree:
         pass
     pass
 
-def create_callflow_tree(conn, name, levels, exclude, to_callee):
-    tree = CallflowTree(name, to_callee)
+def create_callflow_tree(conn, name, levels, exclude, highlight, to_callee):
+    id = conn.execute("SELECT id FROM symbols WHERE name = ?",
+                      (name,)).fetchone()[0]
+    tree = CallflowTree(id, name, to_callee)
+    if tree.root.is_in_set(highlight):
+        tree.root.extra_label.append('color=red')
+        tree.root.hightlight = True
+        pass
     tasks = [(name, levels)]
     while tasks:
         (name, level) = tasks.pop()
@@ -112,7 +146,11 @@ def create_callflow_tree(conn, name, levels, exclude, to_callee):
             child_name = \
                 conn.execute("SELECT name FROM symbols WHERE id = ?",
                              (callee_or_caller,)).fetchone()[0]
-            node = CallflowNode(child_name, tree)
+            node = CallflowNode(callee_or_caller, child_name, tree)
+            if node.is_in_set(highlight):
+                node.extra_label.append('color=red')
+                node.hightlight = True
+                pass
             if tree.symbols[name].add_non_existing_child(node) \
                and child_name not in exclude:
                 tasks.append((child_name, level - 1))
@@ -138,6 +176,8 @@ def main():
     parser.add_option("-x", "--exclude", dest="exclude", action="append",
                         help="Exclude the specified symbol. Stop following the "
                         "symbol.")
+    parser.add_option("-L", "--highlight", dest="highlight", action="append",
+                      help="Hightlight the specified symbol.")
     parser.add_option("-o", "--output", dest="output",
                       help="Output file name. If not specified, output to stdout.")
     (options, args) = parser.parse_args()
@@ -151,11 +191,15 @@ def main():
         pass
 
     if options.levels is None:
-        usage()
+        options.levels = 5
         pass
 
     if options.exclude is None:
         options.exclude = []
+        pass
+
+    if options.highlight is None:
+        options.highlight = []
         pass
 
     if options.output is None:
@@ -172,11 +216,13 @@ def main():
             tree = create_callflow_tree(conn, follow[1:],
                                         options.levels,
                                         options.exclude,
+                                        options.highlight,
                                         True)
         elif follow.startswith("~"):
             tree = create_callflow_tree(conn, follow[1:],
                                         options.levels,
                                         options.exclude,
+                                        options.highlight,
                                         False)
         else:
             usage()
