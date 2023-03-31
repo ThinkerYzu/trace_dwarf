@@ -6,6 +6,7 @@
 #
 # Usage: draw-types.py [-t <type>] [-n <max-levels>]
 #                      [-x <exclude-type>] [-X <strict-exclude-type>]
+#                      [-L <highlight-type>]
 #                      [-o <output-file>]
 #                      [-i]
 #                      <database>
@@ -140,8 +141,25 @@ transit_types = [
     'DW_TAG_array_type',
     ]
 
+def in_set(_type, set):
+    return _type.name in set or '@' + str(_type.id) in set
+
+def draw_type_node(_type, show_id, highlight_types):
+    attrs = ['shape=rect']
+    if in_set(_type, highlight_types):
+        attrs.append('color=red')
+        pass
+    if show_id:
+        attrs.append('label="%s\\n%s"' % (_type.get_full_name(), _type.id))
+    else:
+        attrs.append('label="%s"' % _type.get_full_name())
+        pass
+    print('  "%s" [%s];' % (_type.id, ','.join(attrs)))
+    pass
+
 def draw_types(db, type_ids, max_levels,
                exclude_types, strict_exclude_types,
+               highlight_types,
                show_id=False):
     tasks = [(Type(db, type_id), to_descendant, 0)
              for type_id, to_descendant in type_ids]
@@ -159,11 +177,7 @@ def draw_types(db, type_ids, max_levels,
             continue
         visited.add(_type.id)
         if _type.id not in has_labels:
-            if show_id:
-                print('  "%s" [label="%s@%s",shape=rect];' % (_type.id, _type.get_full_name(), _type.id))
-            else:
-                print('  "%s" [label="%s",shape=rect];' % (_type.id, _type.get_full_name()))
-                pass
+            draw_type_node(_type, show_id, highlight_types)
             has_labels.add(_type.id)
             pass
         if lvl > max_levels and max_levels > 0:
@@ -171,7 +185,7 @@ def draw_types(db, type_ids, max_levels,
         for member in _type.members:
             member_type = Type(db, member.type_id)
             if to_descendant:
-                if (member_type.name in strict_exclude_types) or (('@' + str(member_type.id)) in strict_exclude_types):
+                if in_set(member_type, strict_exclude_types):
                     continue
                 pass
             if _type.meta_type not in transit_types:
@@ -179,11 +193,7 @@ def draw_types(db, type_ids, max_levels,
                     continue
                 pass
             if member_type.id not in has_labels:
-                if show_id:
-                    print('  "%s" [label="%s@%s",shape=rect];' % (member_type.id, member_type.get_full_name(), member_type.id))
-                else:
-                    print('  "%s" [label="%s",shape=rect];' % (member_type.id, member_type.get_full_name()))
-                    pass
+                draw_type_node(member_type, show_id, highlight_types)
                 has_labels.add(member_type.id)
                 pass
             if _type.meta_type in ('DW_TAG_structure_type', 'DW_TAG_union_type'):
@@ -201,7 +211,7 @@ def draw_types(db, type_ids, max_levels,
                     pass
                 visited.add(edge)
                 if to_descendant:
-                    if member_type.name in exclude_types or ('@' + str(member_type.id)) in exclude_types:
+                    if in_set(member_type, exclude_types):
                         continue
                     tasks.append((member_type, to_descendant, lvl + 1))
                     pass
@@ -224,10 +234,14 @@ def main():
     parser.add_argument('-n', '--max-levels', type=int, help='maximum number of levels to draw')
     parser.add_argument('-x', '--exclude-type', action='append', help='type name or id to exclude')
     parser.add_argument('-X', '--strict-exclude-type', action='append', help='type name or id to exclude (not show at all)')
+    parser.add_argument('-L', '--highlight', action='append', help='type name or id to highlight')
     parser.add_argument('-i', '--show-id', action='store_true', help='show address of types')
     parser.add_argument('-o', '--output-file', help='output file')
     args = parser.parse_args()
 
+    if not args.highlight:
+        args.highlight = []
+        pass
     if args.output_file:
         sys.stdout = open(args.output_file, 'w')
 
@@ -259,6 +273,7 @@ def main():
     draw_types(db, type_ids, args.max_levels or 5,
                set(args.exclude_type or []),
                set(args.strict_exclude_type or []),
+               args.highlight,
                show_id=args.show_id)
 
     print('}')
