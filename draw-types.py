@@ -160,9 +160,9 @@ def draw_types(db, type_ids, max_levels,
         visited.add(_type.id)
         if _type.id not in has_labels:
             if show_id:
-                print('"%s" [label="%s@%s"];' % (_type.id, _type.get_full_name(), _type.id))
+                print('  "%s" [label="%s@%s",shape=rect];' % (_type.id, _type.get_full_name(), _type.id))
             else:
-                print('  "%s" [label="%s"];' % (_type.id, _type.get_full_name()))
+                print('  "%s" [label="%s",shape=rect];' % (_type.id, _type.get_full_name()))
                 pass
             has_labels.add(_type.id)
             pass
@@ -180,9 +180,9 @@ def draw_types(db, type_ids, max_levels,
                 pass
             if member_type.id not in has_labels:
                 if show_id:
-                    print('"%s" [label="%s@%s"];' % (member_type.id, member_type.get_full_name(), member_type.id))
+                    print('  "%s" [label="%s@%s",shape=rect];' % (member_type.id, member_type.get_full_name(), member_type.id))
                 else:
-                    print('  "%s" [label="%s"];' % (member_type.id, member_type.get_full_name()))
+                    print('  "%s" [label="%s",shape=rect];' % (member_type.id, member_type.get_full_name()))
                     pass
                 has_labels.add(member_type.id)
                 pass
@@ -201,6 +201,8 @@ def draw_types(db, type_ids, max_levels,
                     pass
                 visited.add(edge)
                 if to_descendant:
+                    if member_type.name in exclude_types or ('@' + str(member_type.id)) in exclude_types:
+                        continue
                     tasks.append((member_type, to_descendant, lvl + 1))
                     pass
                 pass
