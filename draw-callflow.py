@@ -113,8 +113,9 @@ class CallflowTree:
                     pass
                 if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
                     out.write('"%s" -> "%s" [color=red,weight=2];\n' % (child.name, node.name))
+                else:
+                    out.write('"%s" -> "%s";\n' % (child.name, node.name))
                     pass
-                out.write('"%s" -> "%s";\n' % (child.name, node.name))
                 tasks.append(child)
                 pass
             pass

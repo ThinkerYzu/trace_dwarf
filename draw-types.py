@@ -149,6 +149,12 @@ def draw_types(db, type_ids, max_levels,
     has_labels = set()
     while tasks:
         _type, to_descendant, lvl = tasks.pop(0)
+        if not to_descendant:
+            if _type.name in strict_exclude_types or ('@' + str(_type.id)) in exclude_types:
+                continue
+            if lvl > max_levels and max_levels > 0 and not to_descendant:
+                continue
+            pass
         if _type.id in visited:
             continue
         visited.add(_type.id)
@@ -160,14 +166,14 @@ def draw_types(db, type_ids, max_levels,
                 pass
             has_labels.add(_type.id)
             pass
-        if _type.name in exclude_types or ('@' + str(_type.id)) in exclude_types:
-            continue
         if lvl > max_levels and max_levels > 0:
             continue
         for member in _type.members:
             member_type = Type(db, member.type_id)
-            if (member_type.name in strict_exclude_types) or (('@' + str(member_type.id)) in strict_exclude_types):
-                continue
+            if to_descendant:
+                if (member_type.name in strict_exclude_types) or (('@' + str(member_type.id)) in strict_exclude_types):
+                    continue
+                pass
             if _type.meta_type not in transit_types:
                 if member_type.meta_type == 'DW_TAG_base_type':
                     continue
@@ -200,6 +206,8 @@ def draw_types(db, type_ids, max_levels,
                 pass
             pass
         if not to_descendant:
+            if _type.name in exclude_types or ('@' + str(_type.id)) in exclude_types:
+                continue
             for dependant_id in get_dependant_ids(db, _type.id):
                 tasks.append((Type(db, dependant_id), to_descendant, lvl + 1))
                 pass
