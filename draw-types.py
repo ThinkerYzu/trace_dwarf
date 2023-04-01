@@ -150,7 +150,7 @@ def draw_type_node(_type, show_id, highlight_types):
         attrs.append('color=red')
         pass
     if show_id:
-        attrs.append('label="%s\\n%s"' % (_type.get_full_name(), _type.id))
+        attrs.append('label="%s@%s"' % (_type.get_full_name(), _type.id))
     else:
         attrs.append('label="%s"' % _type.get_full_name())
         pass
