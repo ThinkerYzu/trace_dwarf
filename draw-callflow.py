@@ -52,10 +52,9 @@ class CallflowNode:
         pass
 
     def add_non_existing_child(self, child):
-        if child.name in self.tree.symbols:
+        if child in self.children:
             return False
         self.children.append(child)
-        self.tree.symbols[child.name] = child
         return True
 
     def is_in_set(self, set):
@@ -79,15 +78,21 @@ class CallflowTree:
 
     def draw_to_callee(self, out):
         tasks = [self.root]
+        has_label = set()
         visited = set()
         while tasks:
             node = tasks.pop()
-            if node.name not in visited and node.extra_label:
+            if node in visited:
+                continue
+            visited.add(node)
+            if node.name not in has_label and node.extra_label:
                 out.write('"%s" [%s];\n' % (node.name, ','.join(node.extra_label)))
+                has_label.add(node.name)
                 pass
             for child in node.children:
-                if child.name not in visited and child.extra_label:
+                if child.name not in has_label and child.extra_label:
                     out.write('"%s" [%s];\n' % (child.name, ','.join(child.extra_label)))
+                    has_label.add(child.name)
                     pass
                 if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
                     out.write('"%s" -> "%s" [color=red,weight=2];\n' % (node.name, child.name))
@@ -101,15 +106,21 @@ class CallflowTree:
 
     def draw_to_caller(self, out):
         tasks = [self.root]
+        has_label = set()
         visited = set()
         while tasks:
             node = tasks.pop()
-            if node.name not in visited and node.extra_label:
+            if node in visited:
+                continue
+            visited.add(node)
+            if node.name not in has_label and node.extra_label:
                 out.write('"%s" [%s];\n' % (node.name, ','.join(node.extra_label)))
+                has_label.add(node.name)
                 pass
             for child in node.children:
-                if child.name not in visited and child.extra_label:
+                if child.name not in has_label and child.extra_label:
                     out.write('"%s" [%s];\n' % (child.name, ','.join(child.extra_label)))
+                    has_label.add(child.name)
                     pass
                 if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
                     out.write('"%s" -> "%s" [color=red,weight=2];\n' % (child.name, node.name))
@@ -147,12 +158,20 @@ def create_callflow_tree(conn, name, levels, exclude, highlight, to_callee):
             child_name = \
                 conn.execute("SELECT name FROM symbols WHERE id = ?",
                              (callee_or_caller,)).fetchone()[0]
-            node = CallflowNode(callee_or_caller, child_name, tree)
+            if child_name in tree.symbols:
+                node = tree.symbols[child_name]
+                new_node = False
+            else:
+                node = CallflowNode(callee_or_caller, child_name, tree)
+                tree.symbols[child_name] = node
+                new_node = True
+                pass
             if node.is_in_set(highlight):
                 node.extra_label.append('color=red')
                 node.hightlight = True
                 pass
             if tree.symbols[name].add_non_existing_child(node) \
+               and new_node \
                and child_name not in exclude:
                 tasks.append((child_name, level - 1))
                 pass
