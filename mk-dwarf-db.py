@@ -509,7 +509,7 @@ def break_circular_reference(types, context):
     context['placeholder_names'] = placeholder_names
     if len(types) == 0:
         return
-    tpiter = iter(types)
+    tpiter = iter(list(types.keys()))
     # 1. Create a list of tasks of types to be processed. Each task is a tuple
     #    of a type and a list of visited types.
     tasks = [(types[next(tpiter)], [])]
