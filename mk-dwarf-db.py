@@ -66,14 +66,14 @@ def parse_addr_value(value):
 
 def find_enclosing_caller(stk):
     for i in range(len(stk)-2, -1, -1):
-        if stk[i][0] in subprogram_tags:
-            return stk[i][1]    # address
+        if 'call' in stk[i]:
+            return stk[i]       # address
     return None
 
 def find_enclosing_type(stk):
     for i in range(len(stk)-2, -1, -1):
-        if stk[i][0] in type_tags:
-            return stk[i][1]
+        if 'meta_type' in stk[i] and stk[i]['meta_type'] in type_tags:
+            return stk[i]
     return None
 
 def init_schema(conn):
@@ -207,9 +207,11 @@ def persist_info(subprograms, types, filename):
 
 def parse_DIEs(lines):
     subprograms = {}
+    subprograms_lst = []
     types = {'void': {'name': 'void',
                       'meta_type': 'DW_TAG_base_type',
                       'addr': 'void'}}
+    types_lst = []
     stk = []
     meta_flyweight = {}
     name_flyweight = {}
@@ -238,13 +240,8 @@ def parse_DIEs(lines):
         raise '<unknown>'
 
     def tip_tag():
-        if len(stk) > 0:
-            return stk[-1][0]
-        return None
-
-    def tip_addr():
-        if len(stk) > 0:
-            return stk[-1][1]
+        if len(stk) > 0 and 'meta_type' in stk[-1]:
+            return stk[-1]['meta_type']
         return None
 
     def original_subprograms():
@@ -259,38 +256,50 @@ def parse_DIEs(lines):
                 stk.pop()
                 continue
             stk = stk[:dep]
-            stk.append((die, addr))
             if die in subprogram_tags:
-                subprograms[addr] = {'name': '<unknown>', 'call': []}
+                subp = {'name': '<unknown>',
+                        'call': [],
+                        'addr': addr,
+                        'meta_type': meta_flyweight.setdefault(die, die)}
+                subprograms_lst.append(subp)
+                stk.append(subp)
             elif die in type_tags:
-                types[addr] = {'name': '<unknown>',
-                               'meta_type': meta_flyweight.setdefault(die, die),
-                               'addr': addr}
+                _type = {'name': '<unknown>',
+                         'meta_type': meta_flyweight.setdefault(die, die),
+                         'addr': addr}
                 if die in ('DW_TAG_structure_type', 'DW_TAG_union_type', 'DW_TAG_class_type'):
-                    types[addr]['members'] = []
+                    _type['members'] = []
                 elif die in ('DW_TAG_pointer_type', 'DW_TAG_const_type',
                              'DW_TAG_volatile_type', 'DW_TAG_restrict_type',
                              'DW_TAG_ptr_to_member_type'):
-                    types[addr]['type'] = 'void'
+                    _type['type'] = 'void'
                 elif die == 'DW_TAG_enumeration_type':
-                    types[addr]['values'] = []
-                    types[addr]['type'] = 'void'
+                    _type['values'] = []
+                    _type['type'] = 'void'
                 elif die == 'DW_TAG_subroutine_type':
-                    types[addr]['params'] = []
+                    _type['params'] = []
                     pass
+                types_lst.append(_type)
+                stk.append(_type)
                 pass
             elif die == 'DW_TAG_member':
-                enclosing_type = find_enclosing_type(stk)
                 member_def = {'name': '<unknown>',
+                              'meta_type': meta_flyweight.setdefault(die, die),
                               'type': None,
                               'location': None}
-                types[enclosing_type]['members'].append(member_def)
+                stk.append(member_def)
+                enclosing_type = find_enclosing_type(stk)
+                enclosing_type['members'].append(member_def)
                 pass
             elif die == 'DW_TAG_enumerator':
-                enclosing_type = find_enclosing_type(stk)
                 value_def = {'name': '<unknown>',
-                            'value': None}
-                types[enclosing_type]['values'].append(value_def)
+                             'meta_type': meta_flyweight.setdefault(die, die),
+                             'value': None}
+                stk.append(value_def)
+                enclosing_type = find_enclosing_type(stk)
+                enclosing_type['values'].append(value_def)
+            else:
+                stk.append({'meta_type': meta_flyweight.setdefault(die, die)})
                 pass
             pass
         elif tip_tag() == 'DW_TAG_subprogram':
@@ -299,18 +308,18 @@ def parse_DIEs(lines):
                 continue
             attr, value = attr_value
             if attr == 'DW_AT_name':
-                tag, addr = stk[-1]
+                subp = stk[-1]
                 name = fly_name(get_name(value))
-                subprograms[addr]['name'] = name
+                subp['name'] = name
                 #print(' ' * len(stk), attr, get_name(value))
             elif attr == 'DW_AT_linkage_name':
-                tag, addr = stk[-1]
+                subp = stk[-1]
                 name = fly_name(get_name(value))
-                subprograms[addr]['linkage_name'] = name
+                subp['linkage_name'] = name
             elif attr == 'DW_AT_abstract_origin':
-                tag, addr = stk[-1]
+                subp = stk[-1]
                 abstract_origin = parse_abstract_origin(value)
-                subprograms[addr]['origin'] = abstract_origin
+                subp['origin'] = abstract_origin
                 pass
             pass
         elif tip_tag() in call_site_tags:
@@ -320,17 +329,18 @@ def parse_DIEs(lines):
                 if attr in origin_tags:
                     abstract_origin = parse_abstract_origin(value)
                     if abstract_origin:
-                        if stk[-1][0] == 'DW_TAG_inlined_subroutine':
-                            tag, addr = stk[-1]
-                            subprograms[addr]['origin'] = abstract_origin
-                            pass
                         enclosing_caller = find_enclosing_caller(stk)
+                        if tip_tag() == 'DW_TAG_inlined_subroutine':
+                            subp = stk[-1]
+                            subp['origin'] = abstract_origin
+                            pass
                         if not enclosing_caller:
                             print('no enclosing caller')
                             pprint(stk)
                             raise 'no enclosing caller'
-                        subprograms[enclosing_caller]['call'].append(abstract_origin)
-                        #print(' ' * (len(stk) + 1), subprograms[addr]['name'], 'call', abstract_origin)
+                        if abstract_origin not in enclosing_caller['call']:
+                            enclosing_caller['call'].append(abstract_origin)
+                            pass
                         pass
                     pass
                 pass
@@ -340,8 +350,7 @@ def parse_DIEs(lines):
             if not attr_value:
                 continue
             attr, value = attr_value
-            tag, addr = stk[-1]
-            _type = types[addr]
+            _type = stk[-1]
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
                 _type['name'] = name
@@ -359,8 +368,7 @@ def parse_DIEs(lines):
             if not attr_value:
                 continue
             attr, value = attr_value
-            tag, addr = stk[-1]
-            member = types[find_enclosing_type(stk)]['members'][-1]
+            member = find_enclosing_type(stk)['members'][-1]
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
                 member['name'] = name
@@ -378,45 +386,62 @@ def parse_DIEs(lines):
             if not attr_value:
                 continue
             attr, value = attr_value
-            tag, addr = stk[-1]
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
-                types[find_enclosing_type(stk)]['values'][-1]['name'] = name
+                find_enclosing_type(stk)['values'][-1]['name'] = name
             elif attr == 'DW_AT_linkage_name':
                 name = fly_name(get_name(value))
-                types[find_enclosing_type(stk)]['values'][-1]['linkage_name'] = name
+                find_enclosing_type(stk)['values'][-1]['linkage_name'] = name
             elif attr == 'DW_AT_const_value':
                 if value.strip().startswith('0x'):
                     value = int(value, 16)
                 else:
                     value = int(value)
                     pass
-                types[find_enclosing_type(stk)]['values'][-1]['value'] = value
+                find_enclosing_type(stk)['values'][-1]['value'] = value
                 pass
             pass
         elif tip_tag() == 'DW_TAG_formal_parameter':
-            if stk[-2][0] != 'DW_TAG_subroutine_type':
+            if 'meta_type' not in stk[-2] or stk[-2]['meta_type'] != 'DW_TAG_subroutine_type':
                 continue
             attr_value = parse_attr(line)
             if not attr_value:
                 continue
             attr, value = attr_value
-            tag, addr = stk[-1]
             if attr == 'DW_AT_type':
                 type_addr = parse_addr_value(value)
-                types[find_enclosing_type(stk)]['params'].append(type_addr)
+                find_enclosing_type(stk)['params'].append(type_addr)
                 pass
             pass
         pass
 
+    subprograms.update((subp['addr'], subp) for subp in subprograms_lst)
+    types.update((_type['addr'], _type) for _type in types_lst)
+
     for subp in subprograms.values():
         if not is_original(subp):
-            subprograms[get_real_addr(subp['origin'])]['call'] += subp['call']
+            origin = subprograms[get_real_addr(subp['origin'])]
+            for call in subp['call']:
+                if call in origin['call']:
+                    continue
+                origin['call'].append(call)
+                pass
+            pass
+        else:
+            if subp['name'] == '<unknown>':
+                subp['name'] += subp['addr']
+                pass
             pass
         pass
     for subp in original_subprograms():
         subp['call_names'] = [get_name_addr(addr)
                               for addr in set(subp['call'])]
+        pass
+    for subp in subprograms_lst:
+        if (not is_original(subp)) and \
+           subp['meta_type'] == 'DW_TAG_inlined_subroutine':
+            del subprograms[subp['addr']]
+            pass
         pass
     return subprograms, types
 
@@ -546,6 +571,8 @@ def break_circular_reference(types, context):
                 # 2.5.1. Creat a task to process the member type. Add the
                 #        current type to the list of visited types of the
                 #        new task.
+                if not member['type']:
+                    print(_type)
                 tasks.append((types[member['type']], visited + [_type['addr']]))
                 pass
             pass
