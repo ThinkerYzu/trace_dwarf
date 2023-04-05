@@ -5,6 +5,8 @@ import re
 import optparse
 import os
 import time
+import itertools
+import hashlib
 from pprint import pprint
 
 DIE_reo = re.compile(r'^ ?<\d+><(\d|[a-f])+>: Abbrev Number: \d+.*$')
@@ -34,6 +36,10 @@ type_tags = ('DW_TAG_array_type',
              'DW_TAG_union_type',
              'DW_TAG_volatile_type',
              'DW_TAG_unspecified_type')
+ptr_tags = ('DW_TAG_pointer_type',
+            'DW_TAG_ptr_to_member_type',
+            'DW_TAG_reference_type',
+            'DW_TAG_rvalue_reference_type')
 
 def is_DIE(line):
     if DIE_reo.match(line):
@@ -106,6 +112,9 @@ def get_symbol_id(conn, symbol):
     cur = conn.execute('select id from symbols where name = ?',
                        (symbol,))
     row = cur.fetchone()
+    if not row:
+        print(symbol)
+        pass
     return row[0]
 
 def is_original(subprogram):
@@ -244,10 +253,6 @@ def parse_DIEs(lines):
             return stk[-1]['meta_type']
         return None
 
-    def original_subprograms():
-        return [subp for subp in subprograms.values()
-                if is_original(subp)]
-
     for line in lines:
         dep_addr_die = is_DIE(line)
         if dep_addr_die:
@@ -270,6 +275,7 @@ def parse_DIEs(lines):
                 if die in ('DW_TAG_structure_type', 'DW_TAG_union_type', 'DW_TAG_class_type'):
                     _type['members'] = []
                 elif die in ('DW_TAG_pointer_type', 'DW_TAG_const_type',
+                             'DW_TAG_reference_type', 'DW_TAG_rvalue_reference_type',
                              'DW_TAG_volatile_type', 'DW_TAG_restrict_type',
                              'DW_TAG_ptr_to_member_type'):
                     _type['type'] = 'void'
@@ -320,6 +326,10 @@ def parse_DIEs(lines):
                 subp = stk[-1]
                 abstract_origin = parse_abstract_origin(value)
                 subp['origin'] = abstract_origin
+            elif attr == 'DW_AT_specification':
+                subp = stk[-1]
+                specification = parse_abstract_origin(value)
+                subp['specification'] = specification
                 pass
             pass
         elif tip_tag() in call_site_tags:
@@ -379,6 +389,8 @@ def parse_DIEs(lines):
                 member['type'] = parse_addr_value(value)
             elif attr == 'DW_AT_data_member_location':
                 member['location'] = value
+            elif attr == 'DW_AT_external':
+                member['external'] = True
                 pass
             pass
         elif tip_tag() == 'DW_TAG_enumerator':
@@ -433,10 +445,6 @@ def parse_DIEs(lines):
                 pass
             pass
         pass
-    for subp in original_subprograms():
-        subp['call_names'] = [get_name_addr(addr)
-                              for addr in set(subp['call'])]
-        pass
     for subp in subprograms_lst:
         if (not is_original(subp)) and \
            subp['meta_type'] == 'DW_TAG_inlined_subroutine':
@@ -452,7 +460,7 @@ def make_signature(_type, types):
         return get_symbol_name(_type)
     if _type['meta_type'] == 'DW_TAG_unspecified_type':
         return get_symbol_name(_type)
-    if _type['meta_type'] in ('DW_TAG_pointer_type', 'DW_TAG_ptr_to_member_type'):
+    if _type['meta_type'] in ptr_tags:
         if types[_type['type']]['meta_type'] == 'placeholder':
             return '<pointer>:' + get_symbol_name(types[_type['type']])
         return '<pointer>:' + _type['type']
@@ -476,7 +484,9 @@ def make_signature(_type, types):
         pass
     return sig
 
-def make_sig_recur(_type, types):
+def make_sig_recur(_type, types, lvl=0):
+    if lvl == 100:
+        raise 'too deep'
     if _type['meta_type'] == 'placeholder':
         return get_symbol_name(_type)
     if _type['meta_type'] == 'DW_TAG_base_type':
@@ -485,11 +495,11 @@ def make_sig_recur(_type, types):
         return get_symbol_name(_type)
     sig = _type['meta_type'] + ' ' + get_symbol_name(_type)
     if 'type' in _type:
-        sig += ' ' + make_sig_recur(types[_type['type']], types)
+        sig += ' ' + make_sig_recur(types[_type['type']], types, lvl+1)
     if 'members' in _type:
         sig += ' {'
         sig += ','.join([get_symbol_name(member) + ':' +
-                         make_sig_recur(types[member['type']], types)
+                         make_sig_recur(types[member['type']], types, lvl+1)
                          for member in _type['members']])
         sig += '}'
     if 'values' in _type:
@@ -499,9 +509,13 @@ def make_sig_recur(_type, types):
         sig += '}'
     if 'params' in _type:
         sig += '('
-        sig += ','.join([make_sig_recur(types[param], types)
+        sig += ','.join([make_sig_recur(types[param], types, lvl+1)
                          for param in _type['params']])
         sig += ')'
+        pass
+
+    if lvl == 0:
+        sig = hashlib.sha256(sig.encode('utf-8')).hexdigest()
         pass
     return sig
 
@@ -519,17 +533,17 @@ def make_sig_recur(_type, types):
 #    of a type and a list of visited types.
 # 2. Repeat until all tasks are done:
 #    2.1. Pop a task from the list.
-#    2.2. If the type is marked as visited and empty visited list, skip it.
+#    2.2. If the type is marked as visited and with the same start addr,
+#         skip it.
 #    2.3. Mark the type as visited.
-#    2.4. If the type is a pointer type, follow the pointer type.
-#         2.4.1. If the following type is in the list of visited types,
-#                replace the pointer type with a placeholder type to break
-#                the circular reference.
+#    2.4. If the type is in the list of visited types,
+#         replace a pointer type with a placeholder type to break
+#         the circular reference.
 #    2.5. Repeat for each member of the type.
 #         2.5.1. Creat a task to process the member type. Add the current
 #                type to the list of visited types of the new task.
 # 3. Stop.
-def break_circular_reference(types, context):
+def break_circular_reference(subprograms, types, context):
     placeholder_names = set()
     context['placeholder_names'] = placeholder_names
     if len(types) == 0:
@@ -537,33 +551,51 @@ def break_circular_reference(types, context):
     tpiter = iter(list(types.keys()))
     # 1. Create a list of tasks of types to be processed. Each task is a tuple
     #    of a type and a list of visited types.
-    tasks = [(types[next(tpiter)], [])]
+    start_addr = next(tpiter)
+    tasks = [(types[start_addr], [], set(), start_addr)]
     # 2. Repeat until all tasks are done:
+    pop_cnt = 0
     while tasks:
         # 2.1. Pop a task from the list.
-        _type, visited = tasks.pop()
+        _type, visited, visited_set, start_addr = tasks.pop()
         if not tasks:
             try:
-                tasks.append((types[next(tpiter)], []))
+                next_start_addr = next(tpiter)
+                tasks.append((types[next_start_addr], [], set(), next_start_addr))
             except StopIteration:
                 pass
+            else:
+                pop_cnt += 1
+                if pop_cnt % 10000:
+                    print('.', end='', flush=True)
+                    pass
+                pass
             pass
-        # 2.2. If the type is marked as visited and empty visited
-        #      list, skip it.
-        if len(visited) == 0 and 'visited' in _type:
+        # 2.2. If the type is marked as visited and with same start
+        #      addr, skip it.
+        if 'visited' in _type and _type['visited'] != start_addr:
             continue
         # 2.3. Mark the type as visited.
-        _type['visited'] = True
-        # 2.4. If the type is a pointer type, follow the pointer type.
-        if _type['meta_type'] in ('DW_TAG_pointer_type', 'DW_TAG_ptr_to_member_type'):
-            # 2.4.1. If the following type is in the list of visited types,
-            #        replace the pointer type with a placeholder type to break
-            #        the circular reference.
-            following_type = types[_type['type']]
-            if _type['type'] in visited:
-                circular_path = visited[visited.index(_type['type']):] + [_type['addr']]
-                break_circular_path(circular_path, types, placeholder_names)
-                continue
+        _type['visited'] = start_addr
+        # 2.4. If the type is in the list of visited types,
+        #      replace a pointer type with a placeholder type to break
+        #      the circular reference.
+        if _type['addr'] in visited_set:
+            path_lst = []
+            while isinstance(visited[0], list):
+                path_lst.append(visited[1:])
+                visited = visited[0]
+                pass
+            path_lst.append(visited)
+            path_lst.reverse()
+            visited = list(itertools.chain(*path_lst))
+            circular_path = visited[visited.index(_type['addr']):]
+            break_circular_path(circular_path, types, placeholder_names)
+            continue
+        visited_set.add(_type['addr'])
+        visited.append(_type['addr'])
+        if len(visited) >= 1024:
+            visisted = [visited]
             pass
         # 2.5. Repeat for each member of the type.
         if 'members' in _type:
@@ -573,15 +605,18 @@ def break_circular_reference(types, context):
                 #        new task.
                 if not member['type']:
                     print(_type)
-                tasks.append((types[member['type']], visited + [_type['addr']]))
+                    pass
+                if member['location'] is None:
+                    continue
+                tasks.append((types[member['type']], visited.copy(), visited_set.copy(), start_addr))
                 pass
             pass
         if 'type' in _type:
-            tasks.append((types[_type['type']], visited + [_type['addr']]))
+            tasks.append((types[_type['type']], visited.copy(), visited_set.copy(), start_addr))
             pass
         if 'params' in _type:
             for param in _type['params']:
-                tasks.append((types[param], visited + [_type['addr']]))
+                tasks.append((types[param], visited.copy(), visited_set.copy(), start_addr))
                 pass
             pass
         pass
@@ -614,7 +649,7 @@ def break_circular_path(circular_path, types, placeholder_names):
     ptrs = []
     for addr in circular_path:
         _type = types[addr]
-        if _type['meta_type'] in ('DW_TAG_pointer_type', 'DW_TAG_ptr_to_member_type') and \
+        if _type['meta_type'] in ptr_tags and \
            'name' in types[_type['type']] and \
            get_symbol_name(types[_type['type']]) != '<unknown>':
             if types[_type['type']]['meta_type'] == 'placeholder':
@@ -646,7 +681,7 @@ def break_circular_path(circular_path, types, placeholder_names):
 def try_existing_placeholders(circular_path, types, placeholder_names):
     for addr in circular_path:
         _type = types[addr]
-        if _type['meta_type'] not in ('DW_TAG_pointer_type', 'DW_TAG_ptr_to_member_type'):
+        if _type['meta_type'] not in ptr_tags:
             continue
         pointed_type = types[_type['type']]
         if 'name' in pointed_type and \
@@ -660,7 +695,7 @@ def try_existing_placeholders(circular_path, types, placeholder_names):
 # non-placholder type but with a name in the set of placholder names.
 def create_placeholders(types, placeholder_names):
     for _type in list(types.values()):
-        if _type['meta_type'] not in ('DW_TAG_pointer_type', 'DW_TAG_ptr_to_member_type'):
+        if _type['meta_type'] not in ptr_tags:
             continue
         pointed_type = types[_type['type']]
         if 'name' in pointed_type and \
@@ -701,7 +736,7 @@ def create_placeholder(addr, types):
 #    1.4. Append the name of the type found in the 1.2 step to the new name.
 #    1.5. Set the 'name' field of the processing type to the new name.
 # 2. Stop.
-def init_transit_type_names(types, context):
+def init_transit_type_names(subprograms, types, context):
     # 1. Repeat until all types are processed:
     for _type in types.values():
         if _type['meta_type'] not in ('DW_TAG_const_type',
@@ -753,7 +788,7 @@ def dump_tree(_type, types, indent=0):
         pass
     pass
 
-def merge_types(types, context):
+def merge_types(subprograms, types, context):
     choosed_types = context.setdefault('choosed_types', {})
 
     for _type in types.values():
@@ -845,7 +880,7 @@ def merge_types(types, context):
         pass
     pass
 
-def dump_types(types, context):
+def dump_types(subprograms, types, context):
     dump_cnt = 0
     for _type in types.values():
         if get_symbol_name(_type) == 'fib_rule' and 'choosed' in _type:
@@ -857,7 +892,7 @@ def dump_types(types, context):
         pass
     pass
 
-def handle_placeholder_replacement(types, context):
+def handle_placeholder_replacement(subprograms, types, context):
     # Handle replaced real types of placeholders.
     for _type in types.values():
         if _type['meta_type'] != 'placeholder':
@@ -869,7 +904,7 @@ def handle_placeholder_replacement(types, context):
         pass
     pass
 
-def remove_replaced_types(types, context):
+def remove_replaced_types(subprograms, types, context):
     # Remove replaced types and placeholders
     non_choosed = 0
     for addr in list(types.keys()):
@@ -890,7 +925,7 @@ def remove_replaced_types(types, context):
     print(' non_choosed', non_choosed, end='')
     pass
 
-def init_merge_set_of_types_with_placeholders(types, context):
+def init_merge_set_of_types_with_placeholders(subprograms, types, context):
     placeholder_names = context['placeholder_names']
     merge_sets = dict([(name, set()) for name in placeholder_names])
     # For each type with a name in placeholder_names.
@@ -924,7 +959,7 @@ def divide_merge_set_sig(merge_set, types):
     return sigs.values()
 
 # Divide each merge set to subsets of same signature.
-def divide_merge_sets_sig(types, context):
+def divide_merge_sets_sig(subprograms, types, context):
     merge_sets = context['merge_sets']
     new_merge_sets = []
     for merge_set in merge_sets:
@@ -1022,7 +1057,7 @@ def find_dependent_merge_sets(_type, types):
 #
 # Repeat this process until the number of merge sets doesn't change
 # anymore.
-def divide_merge_sets_dep(types, context):
+def divide_merge_sets_dep(subprograms, types, context):
     merge_sets = context['merge_sets']
     while True:
         print('.', end='', flush=True)
@@ -1040,7 +1075,7 @@ def divide_merge_sets_dep(types, context):
     pass
 
 # Do replacements for merge sets.
-def replace_merge_sets(types, context):
+def replace_merge_sets(subprograms, types, context):
     merge_sets = context['merge_sets']
     for merge_set in merge_sets:
         if len(merge_set) == 1:
@@ -1063,7 +1098,58 @@ def replace_merge_set(merge_set, types):
         pass
     pass
 
+def remove_external_members(subprograms, types, context):
+    for _type in types.values():
+        if 'members' not in _type:
+            continue
+        for i in range(len(_type['members']) - 1, -1, -1):
+            if 'external' in _type['members'][i]:
+                del _type['members'][i]
+                pass
+            pass
+        pass
+    pass
+
+def borrow_name_from_specification(subprograms, types, context):
+    for subp in subprograms.values():
+        if 'specification' not in subp:
+            continue
+        spec = subprograms[subp['specification']]
+        if get_symbol_name(subp).startswith('<unknown>'):
+            subp['name'] = get_symbol_name(spec)
+            pass
+        pass
+    pass
+
+def redirect_calls_to_origin(subprograms, types, context):
+    for caller in subprograms.values():
+        if 'call' not in caller:
+            continue
+        for i, callee in enumerate(caller['call']):
+            while 'origin' in subprograms[callee]:
+                callee = subprograms[callee]['origin']
+                caller['call'][i] = callee
+                pass
+            pass
+        pass
+    pass
+
+def set_call_names(subprograms, types, context):
+    for subp in subprograms.values():
+        if 'call' not in subp:
+            continue
+        if not is_original(subp):
+            continue
+        subp['call_names'] = [get_symbol_name(subprograms[callee])
+                              for callee in set(subp['call'])]
+        pass
+    pass
+
 type_process_phases = [
+    redirect_calls_to_origin,
+    borrow_name_from_specification,
+    set_call_names,
+    remove_external_members,
     init_transit_type_names,
     break_circular_reference,
     init_merge_set_of_types_with_placeholders,
@@ -1098,14 +1184,14 @@ def main():
         pass
 
     context = {}
-    print('processing types (%d types)' % len(types))
+    print('processing subprograms (%d) and types (%d types)' % (len(subprograms), len(types)))
     for phase in type_process_phases:
         print(' - processing phase', phase.__name__, end='', flush=True)
         start_time = time.time()
-        phase(types, context)
+        phase(subprograms, types, context)
         print(': done in %.2f seconds' % (time.time() - start_time))
         pass
-    print(' - processing phase done (%d types)' % len(types))
+    print(' - processing phase done (%d subprograms and %d types)' % (len(subprograms), len(types)))
 
     print('persisting to %s...' % output)
     persist_info(subprograms, types, output)
