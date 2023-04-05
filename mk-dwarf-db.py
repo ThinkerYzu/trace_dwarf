@@ -606,7 +606,7 @@ def break_circular_reference(subprograms, types, context):
                 if not member['type']:
                     print(_type)
                     pass
-                if member['location'] is None:
+                if _type['meta_type'] != 'DW_TAG_union_type' and member['location'] is None:
                     continue
                 tasks.append((types[member['type']], visited.copy(), visited_set.copy(), start_addr))
                 pass
