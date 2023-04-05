@@ -78,6 +78,10 @@ The following command will create a PNG file from the dot file.
 
     dot -Tpng net.dot > net.png
 
+## Highlights
+You can highlight functions or types by using '-L <symbol>' option.
+A highlighted function or type will be in red.
+
 ## Prerequisites
 
  - python
@@ -86,13 +90,7 @@ The following command will create a PNG file from the dot file.
  - dot (graphviz)
 
 ## TODOs
-Adding information of types to a database is a good idea.  With that,
-people can trace the relationships of a set of types.  Function
-signatures and types of variables are also useful.  With these
-information, user can select a set of functions according type
-constrains.  For example, find out all functions using a specific
-type.
-
+Improve the performance of mk-dwarf-db.py.
 
 ## Warning
 
