@@ -18,25 +18,6 @@ abstract_reo = re.compile('<0x([0-9a-f]+)>')
 addr_reo = re.compile('<0x([0-9a-f]+)>')
 
 origin_attrs = ('DW_AT_abstract_origin', 'DW_AT_call_origin')
-call_site_tags = ('DW_TAG_GNU_call_site',
-                  'DW_TAG_call_site',
-                  'DW_TAG_inlined_subroutine')
-type_tags = ('DW_TAG_array_type',
-             'DW_TAG_base_type',
-             'DW_TAG_const_type',
-             'DW_TAG_enumeration_type',
-             'DW_TAG_pointer_type',
-             'DW_TAG_ptr_to_member_type',
-             'DW_TAG_reference_type',
-             'DW_TAG_restrict_type',
-             'DW_TAG_rvalue_reference_type',
-             'DW_TAG_structure_type',
-             'DW_TAG_class_type',
-             'DW_TAG_subroutine_type',
-             'DW_TAG_typedef',
-             'DW_TAG_union_type',
-             'DW_TAG_volatile_type',
-             'DW_TAG_unspecified_type')
 
 MT_other = -1
 MT_array = 1
@@ -114,7 +95,7 @@ call_site_tags = (MT_GNU_call_site, MT_call_site, MT_inlined_subroutine)
 subprogram_tags = (MT_subprogram, MT_inlined_subroutine)
 ptr_tags = (MT_pointer, MT_ptr_to_member, MT_reference, MT_rvalue_reference)
 
-@dataclass
+@dataclass(slots=True)
 class MemberInfo:
     name: str = '<unknown>'
     linkage_name: str = ''
@@ -123,14 +104,14 @@ class MemberInfo:
     external: bool = False
     pass
 
-@dataclass
+@dataclass(slots=True)
 class ValueInfo:
     name: str = '<unknown>'
     linkage_name: str = ''
     value: int = 0
     pass
 
-@dataclass
+@dataclass(slots=True)
 class TypeInfo:
     addr: int
     meta_type: int
@@ -148,7 +129,7 @@ class TypeInfo:
     choosed: bool = False
     pass
 
-@dataclass
+@dataclass(slots=True)
 class SubpInfo:
     addr: int
     meta_type: int
@@ -342,7 +323,6 @@ def parse_DIEs(lines):
     types = {0: void}
     types_lst = []
     stk = []
-    meta_flyweight = {}
     name_flyweight = {}
 
     def fly_name(name):
@@ -686,7 +666,7 @@ def break_circular_reference(subprograms, types, context):
                 pass
             else:
                 pop_cnt += 1
-                if pop_cnt % 100000:
+                if pop_cnt % 10000 == 0:
                     print('.', end='', flush=True)
                     pass
                 pass
@@ -1199,7 +1179,7 @@ def replace_merge_set(merge_set, types):
         if addr == rep_type.addr:
             continue
         _type = types[addr]
-        _type.replace_by = rep_type.addr
+        _type.replaced_by = rep_type.addr
         pass
     pass
 
