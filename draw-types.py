@@ -15,7 +15,7 @@
 #   create table symbols(id integer primary key asc, name text unique)
 #   create table calls(caller integer, callee integer)
 #   create table types(id integer primary key asc, name text, \
-#                      addr text unique, meta_type text, declaration integer)
+#                      addr integer unique, meta_type text, declaration integer)
 #   create table members(type_id integer, name text, \
 #                        type integer, offset integer)
 import sys

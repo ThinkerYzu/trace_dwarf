@@ -8,6 +8,8 @@ import time
 import itertools
 import hashlib
 from pprint import pprint
+from dataclasses import dataclass, field
+from typing import List
 
 DIE_reo = re.compile(r'^ ?<\d+><(\d|[a-f])+>: Abbrev Number: \d+.*$')
 DIE_tag_reo = re.compile(r'.*<(\d+)><([0-9a-f]+)>: Abbrev Number: \d+ \((\w+)\).*')
@@ -15,11 +17,10 @@ ATTR_reo = re.compile(r'^ *<[0-9a-f]+> +(DW_AT_\w+) *: (.*)$')
 abstract_reo = re.compile('<0x([0-9a-f]+)>')
 addr_reo = re.compile('<0x([0-9a-f]+)>')
 
+origin_attrs = ('DW_AT_abstract_origin', 'DW_AT_call_origin')
 call_site_tags = ('DW_TAG_GNU_call_site',
                   'DW_TAG_call_site',
                   'DW_TAG_inlined_subroutine')
-origin_tags = ('DW_AT_abstract_origin', 'DW_AT_call_origin')
-subprogram_tags = ('DW_TAG_subprogram', 'DW_TAG_inlined_subroutine')
 type_tags = ('DW_TAG_array_type',
              'DW_TAG_base_type',
              'DW_TAG_const_type',
@@ -36,10 +37,129 @@ type_tags = ('DW_TAG_array_type',
              'DW_TAG_union_type',
              'DW_TAG_volatile_type',
              'DW_TAG_unspecified_type')
-ptr_tags = ('DW_TAG_pointer_type',
-            'DW_TAG_ptr_to_member_type',
-            'DW_TAG_reference_type',
-            'DW_TAG_rvalue_reference_type')
+
+MT_other = -1
+MT_array = 1
+MT_base = 2
+MT_const = 3
+MT_enumeration = 4
+MT_pointer = 5
+MT_ptr_to_member = 6
+MT_reference = 7
+MT_restrict = 8
+MT_rvalue_reference = 9
+MT_structure = 10
+MT_class = 11
+MT_subroutine = 12
+MT_typedef = 13
+MT_union = 14
+MT_volatile = 15
+MT_unspecified = 16
+MT_subprogram = 17
+MT_inlined_subroutine = 18
+MT_GNU_call_site = 19
+MT_call_site = 20
+MT_placeholder = 21
+MT_member = 22
+MT_enumerator = 23
+MT_formal_parameter = 24
+
+MT_table = {
+    'DW_TAG_array_type': MT_array,
+    'DW_TAG_base_type': MT_base,
+    'DW_TAG_const_type': MT_const,
+    'DW_TAG_enumeration_type': MT_enumeration,
+    'DW_TAG_pointer_type': MT_pointer,
+    'DW_TAG_ptr_to_member_type': MT_ptr_to_member,
+    'DW_TAG_reference_type': MT_reference,
+    'DW_TAG_restrict_type': MT_restrict,
+    'DW_TAG_rvalue_reference_type': MT_rvalue_reference,
+    'DW_TAG_structure_type': MT_structure,
+    'DW_TAG_class_type': MT_class,
+    'DW_TAG_subroutine_type': MT_subroutine,
+    'DW_TAG_typedef': MT_typedef,
+    'DW_TAG_union_type': MT_union,
+    'DW_TAG_volatile_type': MT_volatile,
+    'DW_TAG_unspecified_type': MT_unspecified,
+    'DW_TAG_subprogram': MT_subprogram,
+    'DW_TAG_inlined_subroutine': MT_inlined_subroutine,
+    'DW_TAG_GNU_call_site': MT_GNU_call_site,
+    'DW_TAG_call_site': MT_call_site,
+    'DW_TAG_placeholder': MT_placeholder,
+    'DW_TAG_member': MT_member,
+    'DW_TAG_enumerator': MT_enumerator,
+    'DW_TAG_formal_parameter': MT_formal_parameter,
+}
+
+MT_table_rev = {v: k for k, v in MT_table.items()}
+
+type_tags = (MT_array,
+             MT_base,
+             MT_const,
+             MT_enumeration,
+             MT_pointer,
+             MT_ptr_to_member,
+             MT_reference,
+             MT_restrict,
+             MT_rvalue_reference,
+             MT_structure,
+             MT_class,
+             MT_subroutine,
+             MT_typedef,
+             MT_union,
+             MT_volatile,
+             MT_unspecified)
+
+call_site_tags = (MT_GNU_call_site, MT_call_site, MT_inlined_subroutine)
+subprogram_tags = (MT_subprogram, MT_inlined_subroutine)
+ptr_tags = (MT_pointer, MT_ptr_to_member, MT_reference, MT_rvalue_reference)
+
+@dataclass
+class MemberInfo:
+    name: str = '<unknown>'
+    linkage_name: str = ''
+    type: int = -1
+    offset: int = -1
+    external: bool = False
+    pass
+
+@dataclass
+class ValueInfo:
+    name: str = '<unknown>'
+    linkage_name: str = ''
+    value: int = 0
+    pass
+
+@dataclass
+class TypeInfo:
+    addr: int
+    meta_type: int
+    id: int = -1
+    name: str = '<unknown>'
+    linkage_name: str = ''
+    declaration: bool = False
+    members: List[MemberInfo] = field(default_factory=list)
+    values: List[ValueInfo] = field(default_factory=list)
+    params: List[int] = field(default_factory=list)
+    type: int = -1
+    real_type: int = -1
+    replaced_by: int = -1
+    visited: int = -1
+    choosed: bool = False
+    pass
+
+@dataclass
+class SubpInfo:
+    addr: int
+    meta_type: int
+    id: int = -1
+    origin: int = -1
+    specification: int = -1
+    name: str = '<unknown>'
+    linkage_name: str = ''
+    calls: List[int] = field(default_factory=list)
+    call_names: List[str] = field(default_factory=list)
+    pass
 
 def is_DIE(line):
     if DIE_reo.match(line):
@@ -72,13 +192,13 @@ def parse_addr_value(value):
 
 def find_enclosing_caller(stk):
     for i in range(len(stk)-2, -1, -1):
-        if 'call' in stk[i]:
-            return stk[i]       # address
+        if isinstance(stk[i], SubpInfo):
+            return stk[i]
     return None
 
 def find_enclosing_type(stk):
     for i in range(len(stk)-2, -1, -1):
-        if 'meta_type' in stk[i] and stk[i]['meta_type'] in type_tags:
+        if isinstance(stk[i], TypeInfo) and stk[i].meta_type in type_tags:
             return stk[i]
     return None
 
@@ -86,7 +206,7 @@ def init_schema(conn):
     conn.execute('create table symbols(id integer primary key asc, name text unique)')
     conn.execute('create table calls(caller integer, callee integer)')
 
-    conn.execute('create table types(id integer primary key asc, name text, addr text unique, meta_type text, declaration integer)')
+    conn.execute('create table types(id integer primary key asc, name text, addr integer unique, meta_type text, declaration integer)')
     conn.execute('create table members(type_id integer, name text, type integer, offset integer)')
     pass
 
@@ -118,12 +238,12 @@ def get_symbol_id(conn, symbol):
     return row[0]
 
 def is_original(subprogram):
-    return 'origin' not in subprogram
+    return subprogram.origin < 0
 
 def get_symbol_name(symbol):
-    if 'linkage_name' in symbol:
-        return symbol['linkage_name']
-    return symbol['name']
+    if symbol.linkage_name:
+        return symbol.linkage_name
+    return symbol.name
 
 def persist_subprogram_info(conn, subprograms):
     subprograms = [subprogram for subprogram in subprograms.values()
@@ -138,7 +258,7 @@ def persist_subprogram_info(conn, subprograms):
     for subp in subprograms:
         caller = get_symbol_id(conn, get_symbol_name(subp))
         calls = [(caller, get_symbol_id(conn, callee))
-                 for callee in subp['call_names']]
+                 for callee in subp.call_names]
         insert_calls(conn, calls)
         pass
 
@@ -146,57 +266,57 @@ def persist_subprogram_info(conn, subprograms):
     pass
 
 def get_real_type(addr, types):
-    if addr.startswith('placeholder:'):
-        return types[types[addr]['real_type']]
+    if types[addr].meta_type == MT_placeholder:
+        return types[types[addr].real_type]
     return types[addr]
 
 def persist_types_info(conn, types):
     for addr, type_info in types.items():
-        if type_info['meta_type'] == 'placeholder':
+        if type_info.meta_type == MT_placeholder:
             continue
         name = get_symbol_name(type_info)
-        meta_type = type_info['meta_type']
-        declaration = 1 if 'declaration' in type_info else 0
+        meta_type = MT_table_rev[type_info.meta_type]
+        declaration = 1 if type_info.declaration else 0
         conn.execute('insert into types(name, addr, meta_type, declaration) values(?, ?, ?, ?)',
                      (name, addr, meta_type, declaration))
         cur = conn.execute('select id from types where addr = ?',
                            (addr,))
         row = cur.fetchone()
         type_id = row[0]
-        type_info['id'] = type_id
+        type_info.id = type_id
         pass
 
     for type_info in types.values():
-        if type_info['meta_type'] == 'placeholder':
+        if type_info.meta_type == MT_placeholder:
             continue
-        type_id = type_info['id']
-        if 'members' in type_info:
-            for member in type_info['members']:
+        type_id = type_info.id
+        if type_info.members:
+            for member in type_info.members:
                 conn.execute('insert into members values(?, ?, ?, ?)',
                              (type_id, get_symbol_name(member),
-                              get_real_type(member['type'], types)['id'],
-                              member['location'] or 0))
+                              get_real_type(member.type, types).id,
+                              member.offset or 0))
                 pass
             pass
-        elif 'type' in type_info:
-            if type_info['type'] not in types:
-                print('unknown type %s' % type_info['type'])
+        if type_info.type >= 0:
+            if type_info.type not in types:
+                print('unknown type %s' % type_info.type)
                 print(type_info)
                 pass
-            type_type = get_real_type(type_info['type'], types)
-            if 'id' not in type_type:
-                print(type_info['type'], types[type_info['type']], type_type)
+            type_type = get_real_type(type_info.type, types)
+            if type_type.id < 0:
+                print(type_info.type, types[type_info.type], type_type)
                 pass
             conn.execute('insert into members values(?, ?, ?, ?)',
                          (type_id, '',
-                          type_type['id'],
+                          type_type.id,
                           0))
             pass
-        elif 'params' in type_info:
-            for i, param in enumerate(type_info['params']):
+        if type_info.params:
+            for i, param in enumerate(type_info.params):
                 conn.execute('insert into members values(?, ?, ?, ?)',
                              (type_id, str(i),
-                              get_real_type(param, types)['id'],
+                              get_real_type(param, types).id,
                               0))
                 pass
             pass
@@ -217,9 +337,9 @@ def persist_info(subprograms, types, filename):
 def parse_DIEs(lines):
     subprograms = {}
     subprograms_lst = []
-    types = {'void': {'name': 'void',
-                      'meta_type': 'DW_TAG_base_type',
-                      'addr': 'void'}}
+    void = TypeInfo(0, MT_base)
+    void.name = 'void'
+    types = {0: void}
     types_lst = []
     stk = []
     meta_flyweight = {}
@@ -233,7 +353,7 @@ def parse_DIEs(lines):
     def get_real_addr(addr):
         while addr in subprograms:
             if not is_original(subprograms[addr]):
-                addr = subprograms[addr]['origin']
+                addr = subprograms[addr].origin
                 continue
             break
         return addr
@@ -242,73 +362,68 @@ def parse_DIEs(lines):
         while addr in subprograms:
             subp = subprograms[addr]
             if not is_original(subp):
-                addr = subp['origin']
+                addr = subp.origin
                 continue
             return get_symbol_name(subp)
-        print('no name for addr: %s' % addr)
+        print('no name for addr: %x' % addr)
         raise '<unknown>'
 
     def tip_tag():
-        if len(stk) > 0 and 'meta_type' in stk[-1]:
-            return stk[-1]['meta_type']
-        return None
+        if len(stk) == 0:
+            return None
+        if isinstance(stk[-1], (TypeInfo, SubpInfo)):
+            return stk[-1].meta_type
+        if isinstance(stk[-1], MemberInfo):
+            return MT_member
+        if isinstance(stk[-1], ValueInfo):
+            return MT_enumerator
+        return stk[-1]['meta_type']
 
     for line in lines:
         dep_addr_die = is_DIE(line)
         if dep_addr_die:
-            dep, addr, die = dep_addr_die
-            if die == '0':
+            dep, addr, die_str = dep_addr_die
+            if die_str == '0':
                 stk.pop()
                 continue
+            addr = int(addr, 16)
+            if die_str in MT_table:
+                die = MT_table[die_str]
+            else:
+                die = MT_other
             stk = stk[:dep]
             if die in subprogram_tags:
-                subp = {'name': '<unknown>',
-                        'call': [],
-                        'addr': addr,
-                        'meta_type': meta_flyweight.setdefault(die, die)}
+                subp = SubpInfo(addr, die)
                 subprograms_lst.append(subp)
                 stk.append(subp)
             elif die in type_tags:
-                _type = {'name': '<unknown>',
-                         'meta_type': meta_flyweight.setdefault(die, die),
-                         'addr': addr}
-                if die in ('DW_TAG_structure_type', 'DW_TAG_union_type', 'DW_TAG_class_type'):
-                    _type['members'] = []
-                elif die in ('DW_TAG_pointer_type', 'DW_TAG_const_type',
-                             'DW_TAG_reference_type', 'DW_TAG_rvalue_reference_type',
-                             'DW_TAG_volatile_type', 'DW_TAG_restrict_type',
-                             'DW_TAG_ptr_to_member_type'):
-                    _type['type'] = 'void'
-                elif die == 'DW_TAG_enumeration_type':
-                    _type['values'] = []
-                    _type['type'] = 'void'
-                elif die == 'DW_TAG_subroutine_type':
-                    _type['params'] = []
+                _type = TypeInfo(addr, die)
+                if die in (MT_pointer, MT_const, MT_reference,
+                           MT_rvalue_reference, MT_volatile,
+                           MT_restrict, MT_ptr_to_member):
+                    _type.type = void.addr
+                elif die == MT_enumeration:
+                    _type.type = void.addr
                     pass
                 types_lst.append(_type)
                 stk.append(_type)
                 pass
-            elif die == 'DW_TAG_member':
-                member_def = {'name': '<unknown>',
-                              'meta_type': meta_flyweight.setdefault(die, die),
-                              'type': None,
-                              'location': None}
+            elif die == MT_member:
+                member_def = MemberInfo()
                 stk.append(member_def)
                 enclosing_type = find_enclosing_type(stk)
-                enclosing_type['members'].append(member_def)
+                enclosing_type.members.append(member_def)
                 pass
-            elif die == 'DW_TAG_enumerator':
-                value_def = {'name': '<unknown>',
-                             'meta_type': meta_flyweight.setdefault(die, die),
-                             'value': None}
+            elif die == MT_enumerator:
+                value_def = ValueInfo()
                 stk.append(value_def)
                 enclosing_type = find_enclosing_type(stk)
-                enclosing_type['values'].append(value_def)
+                enclosing_type.values.append(value_def)
             else:
-                stk.append({'meta_type': meta_flyweight.setdefault(die, die)})
+                stk.append({'meta_type': die})
                 pass
             pass
-        elif tip_tag() == 'DW_TAG_subprogram':
+        elif tip_tag() == MT_subprogram:
             attr_value = parse_attr(line)
             if not attr_value:
                 continue
@@ -316,40 +431,41 @@ def parse_DIEs(lines):
             if attr == 'DW_AT_name':
                 subp = stk[-1]
                 name = fly_name(get_name(value))
-                subp['name'] = name
+                subp.name = name
                 #print(' ' * len(stk), attr, get_name(value))
             elif attr == 'DW_AT_linkage_name':
                 subp = stk[-1]
                 name = fly_name(get_name(value))
-                subp['linkage_name'] = name
+                subp.linkage_name = name
             elif attr == 'DW_AT_abstract_origin':
                 subp = stk[-1]
                 abstract_origin = parse_abstract_origin(value)
-                subp['origin'] = abstract_origin
+                subp.origin = int(abstract_origin, 16)
             elif attr == 'DW_AT_specification':
                 subp = stk[-1]
                 specification = parse_abstract_origin(value)
-                subp['specification'] = specification
+                subp.specification = int(specification, 16)
                 pass
             pass
         elif tip_tag() in call_site_tags:
             attr_value = parse_attr(line)
             if attr_value:
                 attr, value = attr_value
-                if attr in origin_tags:
+                if attr in origin_attrs:
                     abstract_origin = parse_abstract_origin(value)
                     if abstract_origin:
                         enclosing_caller = find_enclosing_caller(stk)
-                        if tip_tag() == 'DW_TAG_inlined_subroutine':
+                        if tip_tag() == MT_inlined_subroutine:
                             subp = stk[-1]
-                            subp['origin'] = abstract_origin
+                            subp.origin = int(abstract_origin, 16)
                             pass
                         if not enclosing_caller:
                             print('no enclosing caller')
                             pprint(stk)
                             raise 'no enclosing caller'
-                        if abstract_origin not in enclosing_caller['call']:
-                            enclosing_caller['call'].append(abstract_origin)
+                        abstract_origin = int(abstract_origin, 16)
+                        if abstract_origin not in enclosing_caller.calls:
+                            enclosing_caller.calls.append(abstract_origin)
                             pass
                         pass
                     pass
@@ -363,34 +479,34 @@ def parse_DIEs(lines):
             _type = stk[-1]
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
-                _type['name'] = name
+                _type.name = name
             elif attr == 'DW_AT_linkage__name':
                 name = fly_name(get_name(value))
-                _type['linkage_name'] = name
+                _type.linkage_name = name
             elif attr == 'DW_AT_type':
-                _type['type'] = parse_addr_value(value)
+                _type.type = int(parse_addr_value(value), 16)
             elif attr == 'DW_AT_declaration':
-                _type['declaration'] = True
+                _type.declaration = True
                 pass
             pass
-        elif tip_tag() == 'DW_TAG_member':
+        elif tip_tag() == MT_member:
             attr_value = parse_attr(line)
             if not attr_value:
                 continue
             attr, value = attr_value
-            member = find_enclosing_type(stk)['members'][-1]
+            member = find_enclosing_type(stk).members[-1]
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
-                member['name'] = name
+                member.name = name
             elif attr == 'DW_AT_linkage_name':
                 name = fly_name(get_name(value))
-                member['linkage_name'] = name
+                member.linkage_name = name
             elif attr == 'DW_AT_type':
-                member['type'] = parse_addr_value(value)
+                member.type = int(parse_addr_value(value), 16)
             elif attr == 'DW_AT_data_member_location':
-                member['location'] = value
+                member.offset = int(value, 16)
             elif attr == 'DW_AT_external':
-                member['external'] = True
+                member.external = True
                 pass
             pass
         elif tip_tag() == 'DW_TAG_enumerator':
@@ -400,86 +516,86 @@ def parse_DIEs(lines):
             attr, value = attr_value
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
-                find_enclosing_type(stk)['values'][-1]['name'] = name
+                find_enclosing_type(stk).values[-1].name = name
             elif attr == 'DW_AT_linkage_name':
                 name = fly_name(get_name(value))
-                find_enclosing_type(stk)['values'][-1]['linkage_name'] = name
+                find_enclosing_type(stk).values[-1].linkage_name = name
             elif attr == 'DW_AT_const_value':
                 if value.strip().startswith('0x'):
                     value = int(value, 16)
                 else:
                     value = int(value)
                     pass
-                find_enclosing_type(stk)['values'][-1]['value'] = value
+                find_enclosing_type(stk).values[-1].value = value
                 pass
             pass
         elif tip_tag() == 'DW_TAG_formal_parameter':
-            if 'meta_type' not in stk[-2] or stk[-2]['meta_type'] != 'DW_TAG_subroutine_type':
+            if not isinstance(stk[-2], TypeInfo) or stk[-2].meta_type != MT_subroutine_type:
                 continue
             attr_value = parse_attr(line)
             if not attr_value:
                 continue
             attr, value = attr_value
             if attr == 'DW_AT_type':
-                type_addr = parse_addr_value(value)
-                find_enclosing_type(stk)['params'].append(type_addr)
+                type_addr = int(parse_addr_value(value), 16)
+                find_enclosing_type(stk).params.append(type_addr)
                 pass
             pass
         pass
 
-    subprograms.update((subp['addr'], subp) for subp in subprograms_lst)
-    types.update((_type['addr'], _type) for _type in types_lst)
+    subprograms.update((subp.addr, subp) for subp in subprograms_lst)
+    types.update((_type.addr, _type) for _type in types_lst)
 
     for subp in subprograms.values():
         if not is_original(subp):
-            origin = subprograms[get_real_addr(subp['origin'])]
-            for call in subp['call']:
-                if call in origin['call']:
+            origin = subprograms[get_real_addr(subp.origin)]
+            for call in subp.calls:
+                if call in origin.calls:
                     continue
-                origin['call'].append(call)
+                origin.calls.append(call)
                 pass
             pass
         else:
-            if subp['name'] == '<unknown>':
-                subp['name'] += subp['addr']
+            if subp.name == '<unknown>':
+                subp.name += hex(subp.addr)[2:]
                 pass
             pass
         pass
     for subp in subprograms_lst:
         if (not is_original(subp)) and \
-           subp['meta_type'] == 'DW_TAG_inlined_subroutine':
-            del subprograms[subp['addr']]
+           subp.meta_type == MT_inlined_subroutine:
+            del subprograms[subp.addr]
             pass
         pass
     return subprograms, types
 
 def make_signature(_type, types):
-    if _type['meta_type'] == 'placeholder':
+    if _type.meta_type == MT_placeholder:
         return get_symbol_name(_type)
-    if _type['meta_type'] == 'DW_TAG_base_type':
+    if _type.meta_type == MT_base:
         return get_symbol_name(_type)
-    if _type['meta_type'] == 'DW_TAG_unspecified_type':
+    if _type.meta_type == MT_unspecified:
         return get_symbol_name(_type)
-    if _type['meta_type'] in ptr_tags:
-        if types[_type['type']]['meta_type'] == 'placeholder':
-            return '<pointer>:' + get_symbol_name(types[_type['type']])
-        return '<pointer>:' + _type['type']
-    sig = _type['meta_type'] + ' ' + get_symbol_name(_type)
-    if 'type' in _type:
-        sig += ' ' + _type['type']
-    if 'members' in _type:
+    if _type.meta_type in ptr_tags:
+        if types[_type.type].meta_type == MT_placeholder:
+            return '<pointer>:' + get_symbol_name(types[_type.type])
+        return '<pointer>:' + hex(_type.type)
+    sig = MT_table_rev[_type.meta_type] + ' ' + get_symbol_name(_type)
+    if _type.type >= 0:
+        sig += ' ' + hex(_type.type)
+    if _type.members:
         sig += ' {'
-        sig += ','.join([get_symbol_name(member) + ':' + member['type']
-                         for member in _type['members']])
+        sig += ','.join([get_symbol_name(member) + ':' + hex(member.type)
+                         for member in _type.members])
         sig += '}'
-    if 'values' in _type:
+    if _type.values:
         sig += ' {'
-        sig += ','.join([get_symbol_name(value) + ':' + str(value['value'])
-                         for value in _type['values']])
+        sig += ','.join([get_symbol_name(value) + ':' + str(value.value)
+                         for value in _type.values])
         sig += '}'
-    if 'params' in _type:
+    if _type.params:
         sig += '('
-        sig += ','.join(_type['params'])
+        sig += ','.join([hex(p) for p in _type.params])
         sig += ')'
         pass
     return sig
@@ -487,30 +603,34 @@ def make_signature(_type, types):
 def make_sig_recur(_type, types, lvl=0):
     if lvl == 100:
         raise 'too deep'
-    if _type['meta_type'] == 'placeholder':
+    if _type.meta_type == MT_placeholder:
         return get_symbol_name(_type)
-    if _type['meta_type'] == 'DW_TAG_base_type':
+    if _type.meta_type == MT_base:
         return get_symbol_name(_type)
-    if _type['meta_type'] == 'DW_TAG_unspecified_type':
+    if _type.meta_type == MT_unspecified:
         return get_symbol_name(_type)
-    sig = _type['meta_type'] + ' ' + get_symbol_name(_type)
-    if 'type' in _type:
-        sig += ' ' + make_sig_recur(types[_type['type']], types, lvl+1)
-    if 'members' in _type:
+    if _type.declaration:
+        sig = MT_table_rev[_type.meta_type] + '+' + get_symbol_name(_type)
+    else:
+        sig = MT_table_rev[_type.meta_type] + ' ' + get_symbol_name(_type)
+        pass
+    if _type.type >= 0:
+        sig += ' ' + make_sig_recur(types[_type.type], types, lvl+1)
+    if _type.members:
         sig += ' {'
         sig += ','.join([get_symbol_name(member) + ':' +
-                         make_sig_recur(types[member['type']], types, lvl+1)
-                         for member in _type['members']])
+                         make_sig_recur(types[member.type], types, lvl+1)
+                         for member in _type.members])
         sig += '}'
-    if 'values' in _type:
+    if _type.values:
         sig += ' {'
-        sig += ','.join([get_symbol_name(value) + ':' + str(value['value'])
-                         for value in _type['values']])
+        sig += ','.join([get_symbol_name(value) + ':' + str(value.value)
+                         for value in _type.values])
         sig += '}'
-    if 'params' in _type:
+    if _type.params:
         sig += '('
         sig += ','.join([make_sig_recur(types[param], types, lvl+1)
-                         for param in _type['params']])
+                         for param in _type.params])
         sig += ')'
         pass
 
@@ -566,21 +686,21 @@ def break_circular_reference(subprograms, types, context):
                 pass
             else:
                 pop_cnt += 1
-                if pop_cnt % 10000:
+                if pop_cnt % 100000:
                     print('.', end='', flush=True)
                     pass
                 pass
             pass
         # 2.2. If the type is marked as visited and with same start
         #      addr, skip it.
-        if 'visited' in _type and _type['visited'] != start_addr:
+        if _type.visited >= 0 and _type.visited != start_addr:
             continue
         # 2.3. Mark the type as visited.
-        _type['visited'] = start_addr
+        _type.visited = start_addr
         # 2.4. If the type is in the list of visited types,
         #      replace a pointer type with a placeholder type to break
         #      the circular reference.
-        if _type['addr'] in visited_set:
+        if _type.addr in visited_set:
             path_lst = []
             while isinstance(visited[0], list):
                 path_lst.append(visited[1:])
@@ -589,33 +709,33 @@ def break_circular_reference(subprograms, types, context):
             path_lst.append(visited)
             path_lst.reverse()
             visited = list(itertools.chain(*path_lst))
-            circular_path = visited[visited.index(_type['addr']):]
+            circular_path = visited[visited.index(_type.addr):]
             break_circular_path(circular_path, types, placeholder_names)
             continue
-        visited_set.add(_type['addr'])
-        visited.append(_type['addr'])
+        visited_set.add(_type.addr)
+        visited.append(_type.addr)
         if len(visited) >= 1024:
             visisted = [visited]
             pass
         # 2.5. Repeat for each member of the type.
-        if 'members' in _type:
-            for member in _type['members']:
+        if _type.members:
+            for member in _type.members:
                 # 2.5.1. Creat a task to process the member type. Add the
                 #        current type to the list of visited types of the
                 #        new task.
-                if not member['type']:
+                if member.type < 0:
                     print(_type)
                     pass
-                if _type['meta_type'] != 'DW_TAG_union_type' and member['location'] is None:
+                if _type.meta_type != MT_union and member.offset < 0:
                     continue
-                tasks.append((types[member['type']], visited.copy(), visited_set.copy(), start_addr))
+                tasks.append((types[member.type], visited.copy(), visited_set.copy(), start_addr))
                 pass
             pass
-        if 'type' in _type:
-            tasks.append((types[_type['type']], visited.copy(), visited_set.copy(), start_addr))
+        if _type.type >= 0:
+            tasks.append((types[_type.type], visited.copy(), visited_set.copy(), start_addr))
             pass
-        if 'params' in _type:
-            for param in _type['params']:
+        if _type.params:
+            for param in _type.params:
                 tasks.append((types[param], visited.copy(), visited_set.copy(), start_addr))
                 pass
             pass
@@ -649,10 +769,9 @@ def break_circular_path(circular_path, types, placeholder_names):
     ptrs = []
     for addr in circular_path:
         _type = types[addr]
-        if _type['meta_type'] in ptr_tags and \
-           'name' in types[_type['type']] and \
-           get_symbol_name(types[_type['type']]) != '<unknown>':
-            if types[_type['type']]['meta_type'] == 'placeholder':
+        if _type.meta_type in ptr_tags and \
+           get_symbol_name(types[_type.type]) != '<unknown>':
+            if types[_type.type].meta_type == MT_placeholder:
                 return
             ptrs.append(_type)
             pass
@@ -663,12 +782,12 @@ def break_circular_path(circular_path, types, placeholder_names):
         #return
         pass
     # 2. Sort the list by the name of the pointed type.
-    ptrs.sort(key=lambda ptr: get_symbol_name(types[ptr['type']]))
+    ptrs.sort(key=lambda ptr: get_symbol_name(types[ptr.type]))
     # 3. Replace the pointed type of the first pointer type in the list
     #    with a placeholder type.
     ptr = ptrs[0]
-    placeholder_names.add(get_symbol_name(types[ptr['type']]))
-    ptr['type'] = create_placeholder(ptr['type'], types)
+    placeholder_names.add(get_symbol_name(types[ptr.type]))
+    ptr.type = create_placeholder(ptr.type, types)
     # 4. Stop.
     pass
 
@@ -681,12 +800,11 @@ def break_circular_path(circular_path, types, placeholder_names):
 def try_existing_placeholders(circular_path, types, placeholder_names):
     for addr in circular_path:
         _type = types[addr]
-        if _type['meta_type'] not in ptr_tags:
+        if _type.meta_type not in ptr_tags:
             continue
-        pointed_type = types[_type['type']]
-        if 'name' in pointed_type and \
-            get_symbol_name(pointed_type) in placeholder_names:
-            _type['type'] = create_placeholder(_type['type'], types)
+        pointed_type = types[_type.type]
+        if get_symbol_name(pointed_type) in placeholder_names:
+            _type.type = create_placeholder(_type.type, types)
             return True
         pass
     return False
@@ -695,30 +813,29 @@ def try_existing_placeholders(circular_path, types, placeholder_names):
 # non-placholder type but with a name in the set of placholder names.
 def create_placeholders(types, placeholder_names):
     for _type in list(types.values()):
-        if _type['meta_type'] not in ptr_tags:
+        if _type.meta_type not in ptr_tags:
             continue
-        pointed_type = types[_type['type']]
-        if 'name' in pointed_type and \
-            get_symbol_name(pointed_type) in placeholder_names:
-            _type['type'] = create_placeholder(_type['type'], types)
+        pointed_type = types[_type.type]
+        if get_symbol_name(pointed_type) in placeholder_names:
+            _type.type = create_placeholder(_type.type, types)
             pass
         pass
     pass
 
+PLACEHOLDER_FLAG = 0x80000000
+
 def create_placeholder(addr, types):
     real_type = types[addr]
-    assert 'name' in real_type
-    placeholder_addr = 'placeholder:' + addr
+    placeholder_addr = addr | PLACEHOLDER_FLAG
     if placeholder_addr in types:
         return placeholder_addr
-    placeholder = {
-        'meta_type': 'placeholder',
-        'name': '<placeholder>:' + get_symbol_name(real_type),
-        'addr': placeholder_addr,
-        'real_type': addr,
-    }
+    placeholder = TypeInfo(placeholder_addr, MT_placeholder)
+    placeholder.name = '<placeholder>:' + get_symbol_name(real_type)
+    placeholder.real_type = addr
     types[placeholder_addr] = placeholder
     return placeholder_addr
+
+transit_tags = (MT_const, MT_volatile, MT_restrict)
 
 # Give a name to unnamed transit types.
 #
@@ -739,25 +856,21 @@ def create_placeholder(addr, types):
 def init_transit_type_names(subprograms, types, context):
     # 1. Repeat until all types are processed:
     for _type in types.values():
-        if _type['meta_type'] not in ('DW_TAG_const_type',
-                                      'DW_TAG_volatile_type',
-                                      'DW_TAG_restrict_type'):
+        if _type.meta_type not in transit_tags:
             continue
         processing = _type
         # 1.1. Initialize the new name as an empty string.
         new_name = ''
         # 1.2. Repeatly follow the 'type' field until a type with a name is
         #      found or a non-transit type is found.
-        while _type['meta_type'] in ('DW_TAG_const_type',
-                                     'DW_TAG_volatile_type',
-                                     'DW_TAG_restrict_type'):
+        while _type.meta_type in transit_tags:
             # 1.2.1. If a type with a name is found, skip it.
-            if 'name' in _type and get_symbol_name(_type) != '<unknown>':
+            if get_symbol_name(_type) != '<unknown>':
                 break
             # 1.2.1. Append the 'meta_type' to the new name.
-            new_name = new_name + ' ' + _type['meta_type']
+            new_name = new_name + ' ' + MT_table_rev[_type.meta_type]
             # 1.2.2. Follow the 'type' field.
-            _type = types[_type['type']]
+            _type = types[_type.type]
             pass
         # 1.3. If the name of the latest type is empty, skip the type.
         if not get_symbol_name(_type) or get_symbol_name(_type) == '<unknown>':
@@ -765,43 +878,40 @@ def init_transit_type_names(subprograms, types, context):
         # 1.4. Append the name of the type found in the 1.2 step to the new name.
         new_name = new_name + ' ' + get_symbol_name(_type)
         # 1.5. Set the 'name' field of the processing type to the new name.
-        processing['name'] = new_name.strip()
+        processing.name = new_name.strip()
         pass
     # 2. Stop.
     pass
 
 # Dump the tree rooted at the given type.
 def dump_tree(_type, types, indent=0):
-    print(' ' * indent + get_symbol_name(_type) + '@' + _type['addr'] + ' ' + _type['meta_type'] + '\tsig: ' + make_signature(_type, types))
-    if 'members' in _type:
-        for member in _type['members']:
-            dump_tree(types[member['type']], types, indent + 2)
-            pass
+    print(' ' * indent + get_symbol_name(_type) + '@' + _type.addr + ' ' + _type.meta_type + '\tsig: ' + make_signature(_type, types))
+    for member in _type.members:
+        dump_tree(types[member.type], types, indent + 2)
         pass
-    elif 'type' in _type:
-        dump_tree(types[_type['type']], types, indent + 2)
+    if _type.type >= 0:
+        dump_tree(types[_type.type], types, indent + 2)
         pass
-    elif 'params' in _type:
-        for param in _type['params']:
-            dump_tree(types[param], types, indent + 2)
-            pass
+    for param in _type.params:
+        dump_tree(types[param], types, indent + 2)
         pass
     pass
 
 def merge_types(subprograms, types, context):
     choosed_types = context.setdefault('choosed_types', {})
+    type_merge_sets = context.setdefault('type_merge_sets', {})
 
     for _type in types.values():
-        if _type['meta_type'] in ('DW_TAG_base_type', 'DW_TAG_unspecified_type'):
+        if _type.meta_type in (MT_base, MT_unspecified):
             if get_symbol_name(_type) in choosed_types:
-                _type['replaced_by'] = choosed_types[get_symbol_name(_type)]['addr']
+                _type.replaced_by = choosed_types[get_symbol_name(_type)].addr
             else:
                 choosed_types[get_symbol_name(_type)] = _type
-                _type['choosed'] = True
+                _type.choosed = True
                 pass
             pass
-        elif _type['meta_type'] == 'placeholder':
-            _type['choosed'] = True
+        elif _type.meta_type == MT_placeholder:
+            _type.choosed = True
             pass
         pass
     replacing_cnt = 1
@@ -811,66 +921,66 @@ def merge_types(subprograms, types, context):
         replacing_cnt = 0
         choosing_cnt = 0
         for _type in types.values():
-            if 'replaced_by' in _type:
+            if _type.replaced_by >= 0:
                 continue
-            if 'choosed' in _type and 'merge_set' not in _type:
+            if _type.choosed and _type.addr not in type_merge_sets:
                 continue
 
             choosed_cnt = 0
             should_choosed = 0
-            if 'type' in _type:
-                backing = types[_type['type']]
-                if 'replaced_by' in backing:
-                    _type['type'] = backing['replaced_by']
+            if _type.type >= 0:
+                backing = types[_type.type]
+                if backing.replaced_by >= 0:
+                    _type.type = backing.replaced_by
                     replacing_cnt += 1
                     pass
-                backing = types[_type['type']]
-                if 'choosed' in backing:
+                backing = types[_type.type]
+                if backing.choosed:
                     choosed_cnt += 1
                     pass
                 should_choosed += 1
                 pass
-            if 'members' in _type:
-                members = _type['members']
+            if _type.members:
+                members = _type.members
                 for i in range(len(members)):
                     member = members[i]
-                    member_backing = types[member['type']]
-                    if 'replaced_by' in member_backing:
-                        member['type'] = member_backing['replaced_by']
+                    member_backing = types[member.type]
+                    if member_backing.replaced_by >= 0:
+                        member.type = member_backing.replaced_by
                         replacing_cnt += 1
                         pass
-                    member_backing = types[member['type']]
-                    if 'choosed' in member_backing:
+                    member_backing = types[member.type]
+                    if member_backing.choosed:
                         choosed_cnt += 1
                         pass
                     pass
                 should_choosed += len(members)
                 pass
-            if 'params' in _type:
-                params = _type['params']
+            if _type.params:
+                params = _type.params
                 for i in range(len(params)):
                     param = params[i]
                     param_backing = types[param]
-                    if 'replaced_by' in param_backing:
-                        params[i] = param_backing['replaced_by']
+                    if param_backing.replaced_by >= 0:
+                        params[i] = param_backing.replaced_by
                         replacing_cnt += 1
                         pass
                     param_backing = types[param]
-                    if 'choosed' in param_backing:
+                    if param_backing.choosed:
                         choosed_cnt += 1
                         pass
                     pass
                 should_choosed += len(params)
                 pass
 
-            if choosed_cnt == should_choosed and 'choosed' not in _type:
+            if choosed_cnt == should_choosed and not _type.choosed:
                 sig = make_signature(_type, types)
                 if sig in choosed_types:
-                    _type['replaced_by'] = choosed_types[sig]['addr']
+                    _type.replaced_by = choosed_types[sig].addr
                     replacing_cnt += 1
                 else:
                     choosed_types[sig] = _type
-                    _type['choosed'] = True
+                    _type.choosed = True
                     choosing_cnt += 1
                     pass
                 pass
@@ -881,25 +991,17 @@ def merge_types(subprograms, types, context):
     pass
 
 def dump_types(subprograms, types, context):
-    dump_cnt = 0
-    for _type in types.values():
-        if get_symbol_name(_type) == 'fib_rule' and 'choosed' in _type:
-            #dump_tree(_type, types)
-            dump_cnt += 1
-            if dump_cnt >= 2:
-                break
-            pass
-        pass
+    # For debugging
     pass
 
 def handle_placeholder_replacement(subprograms, types, context):
     # Handle replaced real types of placeholders.
     for _type in types.values():
-        if _type['meta_type'] != 'placeholder':
+        if _type.meta_type != MT_placeholder:
             continue
-        real_type = types[_type['real_type']]
-        if 'replaced_by' in real_type:
-            _type['real_type'] = real_type['replaced_by']
+        real_type = types[_type.real_type]
+        if real_type.replaced_by >= 0:
+            _type.real_type = real_type.replaced_by
             pass
         pass
     pass
@@ -908,16 +1010,17 @@ def remove_replaced_types(subprograms, types, context):
     # Remove replaced types and placeholders
     non_choosed = 0
     for addr in list(types.keys()):
-        if 'replaced_by' in types[addr]:
-            if 'choosed' in types[addr]:
+        if types[addr].replaced_by >= 0:
+            if types[addr].choosed:
                 print('replaced choosed type', types[addr])
                 pass
             del types[addr]
             pass
-        elif 'choosed' not in types[addr]:
+        elif not types[addr].choosed:
             if non_choosed < 3:
                 print('non choosed types:')
                 print(types[addr])
+                print('... and more')
                 pass
             non_choosed += 1
             pass
@@ -928,24 +1031,24 @@ def remove_replaced_types(subprograms, types, context):
 def init_merge_set_of_types_with_placeholders(subprograms, types, context):
     placeholder_names = context['placeholder_names']
     merge_sets = dict([(name, set()) for name in placeholder_names])
+    type_merge_sets = dict()
     # For each type with a name in placeholder_names.
     for _type in types.values():
-        if 'name' not in _type:
-            continue
         name = get_symbol_name(_type)
         if name not in placeholder_names:
             continue
         # Add the type to the merge set of the name.
-        merge_sets[name].add(_type['addr'])
-        _type['merge_set'] = merge_sets[name]
+        merge_sets[name].add(_type.addr)
+        type_merge_sets[_type.addr] = merge_sets[name]
         pass
 
     context['merge_sets'] = merge_sets.values()
     print(': merge_sets', len(merge_sets), end='')
+    context['type_merge_sets'] = type_merge_sets
     pass
 
 # Divide a marge set to subsets of same signature.
-def divide_merge_set_sig(merge_set, types):
+def divide_merge_set_sig(merge_set, type_merge_sets, types):
     sigs = dict()
     for addr in merge_set:
         _type = types[addr]
@@ -954,16 +1057,17 @@ def divide_merge_set_sig(merge_set, types):
             sigs[sig] = set()
             pass
         sigs[sig].add(addr)
-        _type['merge_set'] = sigs[sig]
+        type_merge_sets[_type.addr] = sigs[sig]
         pass
     return sigs.values()
 
 # Divide each merge set to subsets of same signature.
 def divide_merge_sets_sig(subprograms, types, context):
     merge_sets = context['merge_sets']
+    type_merge_sets = context['type_merge_sets']
     new_merge_sets = []
     for merge_set in merge_sets:
-        sigs = divide_merge_set_sig(merge_set, types)
+        sigs = divide_merge_set_sig(merge_set, type_merge_sets, types)
         new_merge_sets.extend(sigs)
         pass
     context['merge_sets'] = new_merge_sets
@@ -980,17 +1084,17 @@ def divide_merge_sets_sig(subprograms, types, context):
 # 'merge_set' attribute of the dependent type.
 #
 # This function return a list of subsets.
-def divide_merge_set_dep(merge_set, types):
+def divide_merge_set_dep(merge_set, type_merge_sets, types):
     deps = dict()
     for addr in merge_set:
         _type = types[addr]
-        dep_sets = find_dependent_merge_sets(_type, types)
+        dep_sets = find_dependent_merge_sets(_type, type_merge_sets, types)
         dep = tuple((id(dep_set) for dep_set in dep_sets))
         if dep not in deps:
             deps[dep] = set()
             pass
         deps[dep].add(addr)
-        _type['merge_set'] = deps[dep]
+        type_merge_sets[_type.addr] = deps[dep]
         pass
     return deps.values()
 
@@ -1015,7 +1119,7 @@ def divide_merge_set_dep(merge_set, types):
 #         2.3.3. Add the tasks of the 'params' attribute if it
 #                exists.
 # 3. Return a list of dependent sets.
-def find_dependent_merge_sets(_type, types):
+def find_dependent_merge_sets(_type, type_merge_sets, types):
     # 1. Set a list of tasks containing only the given type and an empty
     #    list of dependent sets.
     tasks = [_type]
@@ -1026,26 +1130,26 @@ def find_dependent_merge_sets(_type, types):
         task = tasks.pop()
         # 2.2. If the task is a placeholder, add the merge set of the
         #      placeholder to the list of dependent sets.
-        if task['meta_type'] == 'placeholder':
-            dep_sets.append(types[task['real_type']]['merge_set'])
+        if task.meta_type == MT_placeholder:
+            dep_sets.append(type_merge_sets[types[task.real_type].addr])
             continue
         # 2.3. If the task is not a placeholder, add the tasks of the
         #      attributes of the task to the list.
         #      2.3.1. Add the task of the 'type' attribute if it exists.
-        if 'type' in task:
-            tasks.append(types[task['type']])
+        if task.type >= 0:
+            tasks.append(types[task.type])
             pass
         #      2.3.2. Add the tasks of the 'members' attribute if it
         #             exists.
-        if 'members' in task:
-            for member in task['members']:
-                tasks.append(types[member['type']])
+        if task.members:
+            for member in task.members:
+                tasks.append(types[member.type])
                 pass
             pass
         #      2.3.3. Add the tasks of the 'params' attribute if it
         #             exists.
-        if 'params' in task:
-            for param in task['params']:
+        if task.params:
+            for param in task.params:
                 tasks.append(types[param])
                 pass
             pass
@@ -1059,11 +1163,12 @@ def find_dependent_merge_sets(_type, types):
 # anymore.
 def divide_merge_sets_dep(subprograms, types, context):
     merge_sets = context['merge_sets']
+    type_merge_sets = context['type_merge_sets']
     while True:
         print('.', end='', flush=True)
         new_merge_sets = []
         for merge_set in merge_sets:
-            subsets = divide_merge_set_dep(merge_set, types)
+            subsets = divide_merge_set_dep(merge_set, type_merge_sets, types)
             new_merge_sets.extend(subsets)
             pass
         if len(new_merge_sets) == len(merge_sets):
@@ -1088,23 +1193,23 @@ def replace_merge_sets(subprograms, types, context):
 def replace_merge_set(merge_set, types):
     # Find the representative type.
     rep_type = types[list(merge_set).pop()]
-    rep_type['choose'] = True
+    rep_type.choosed = True
     # Replace all types in the merge set with the representative type.
     for addr in merge_set:
-        if addr == rep_type['addr']:
+        if addr == rep_type.addr:
             continue
         _type = types[addr]
-        _type['replace_by'] = rep_type['addr']
+        _type.replace_by = rep_type.addr
         pass
     pass
 
 def remove_external_members(subprograms, types, context):
     for _type in types.values():
-        if 'members' not in _type:
+        if not _type.members:
             continue
-        for i in range(len(_type['members']) - 1, -1, -1):
-            if 'external' in _type['members'][i]:
-                del _type['members'][i]
+        for i in range(len(_type.members) - 1, -1, -1):
+            if _type.members[i].external:
+                del _type.members[i]
                 pass
             pass
         pass
@@ -1112,23 +1217,23 @@ def remove_external_members(subprograms, types, context):
 
 def borrow_name_from_specification(subprograms, types, context):
     for subp in subprograms.values():
-        if 'specification' not in subp:
+        if subp.specification < 0:
             continue
-        spec = subprograms[subp['specification']]
+        spec = subprograms[subp.specification]
         if get_symbol_name(subp).startswith('<unknown>'):
-            subp['name'] = get_symbol_name(spec)
+            subp.name = get_symbol_name(spec)
             pass
         pass
     pass
 
 def redirect_calls_to_origin(subprograms, types, context):
     for caller in subprograms.values():
-        if 'call' not in caller:
+        if not caller.calls:
             continue
-        for i, callee in enumerate(caller['call']):
-            while 'origin' in subprograms[callee]:
-                callee = subprograms[callee]['origin']
-                caller['call'][i] = callee
+        for i, callee in enumerate(caller.calls):
+            while subprograms[callee].origin >= 0:
+                callee = subprograms[callee].origin
+                caller.calls[i] = callee
                 pass
             pass
         pass
@@ -1136,12 +1241,12 @@ def redirect_calls_to_origin(subprograms, types, context):
 
 def set_call_names(subprograms, types, context):
     for subp in subprograms.values():
-        if 'call' not in subp:
+        if not subp.calls:
             continue
         if not is_original(subp):
             continue
-        subp['call_names'] = [get_symbol_name(subprograms[callee])
-                              for callee in set(subp['call'])]
+        subp.call_names = [get_symbol_name(subprograms[callee])
+                           for callee in set(subp.calls)]
         pass
     pass
 
