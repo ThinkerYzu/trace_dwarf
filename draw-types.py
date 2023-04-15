@@ -98,10 +98,12 @@ class Type:
             meta_tag = ''
         elif self.meta_type == 'DW_TAG_pointer_type':
             meta_tag = 'ptr'
-        elif self.meta_type == 'DW_TAG_constant_type':
-            meta_tag = 'const'
+        elif self.meta_type == 'DW_TAG_const_type':
+            meta_tag = ''
         elif self.meta_type == 'DW_TAG_volatile_type':
-            meta_tag = 'volatile'
+            meta_tag = ''
+        elif self.meta_type == 'DW_TAG_restrict_type':
+            meta_tag = ''
         elif self.meta_type == 'DW_TAG_array_type':
             suffix_tag = '[]'
         elif self.meta_type == 'DW_TAG_subroutine_type':
