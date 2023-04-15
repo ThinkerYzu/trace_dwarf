@@ -121,13 +121,13 @@ class TypeInfo:
     real_type: int = -1
     replaced_by: int = -1
     visited: int = -1
-    choosed: bool = False
+    chosen: bool = False
     def choose_params(self, members=False, values=False, params=False):
         if int(members) + int(values) + int(params) != 1:
             raise ValueError('Only one of members, values, params can be True')
         if (self.members, self.values, self.params) != (members, values, params) and \
            (self.members, self.values, self.params) != (False, False, False):
-            raise ValueError('Params already choosed')
+            raise ValueError('Params already chosen')
         self.members = members
         self.values = values
         self.params = params
@@ -891,21 +891,21 @@ def dump_tree(_type, types, indent=0):
     pass
 
 def merge_types(subprograms, types, context):
-    choosed_types = {}
+    chosen_types = {}
     type_merge_sets = context.setdefault('type_merge_sets', {})
 
     for _type in types.values():
         if _type.meta_type in (MT_base, MT_unspecified):
             name = get_symbol_name(_type)
-            if name in choosed_types:
-                _type.replaced_by = choosed_types[name].addr
+            if name in chosen_types:
+                _type.replaced_by = chosen_types[name].addr
             else:
-                choosed_types[get_symbol_name(_type)] = _type
-                _type.choosed = True
+                chosen_types[get_symbol_name(_type)] = _type
+                _type.chosen = True
                 pass
             pass
         elif _type.meta_type == MT_placeholder:
-            _type.choosed = True
+            _type.chosen = True
             pass
         pass
     replacing_cnt = 1
@@ -917,11 +917,11 @@ def merge_types(subprograms, types, context):
         for _type in types.values():
             if _type.replaced_by >= 0:
                 continue
-            if _type.choosed and _type.addr not in type_merge_sets:
+            if _type.chosen and _type.addr not in type_merge_sets:
                 continue
 
-            choosed_cnt = 0
-            should_choosed = 0
+            chosen_cnt = 0
+            should_chosen = 0
             if _type.type >= 0:
                 backing = types[_type.type]
                 if backing.replaced_by >= 0:
@@ -929,10 +929,10 @@ def merge_types(subprograms, types, context):
                     replacing_cnt += 1
                     pass
                 backing = types[_type.type]
-                if backing.choosed:
-                    choosed_cnt += 1
+                if backing.chosen:
+                    chosen_cnt += 1
                     pass
-                should_choosed += 1
+                should_chosen += 1
                 pass
             if _type.members:
                 members = _type.comm_params
@@ -944,11 +944,11 @@ def merge_types(subprograms, types, context):
                         replacing_cnt += 1
                         pass
                     member_backing = types[member.value]
-                    if member_backing.choosed:
-                        choosed_cnt += 1
+                    if member_backing.chosen:
+                        chosen_cnt += 1
                         pass
                     pass
-                should_choosed += len(members)
+                should_chosen += len(members)
                 pass
             if _type.params:
                 params = _type.params
@@ -960,21 +960,21 @@ def merge_types(subprograms, types, context):
                         replacing_cnt += 1
                         pass
                     param_backing = types[param]
-                    if param_backing.choosed:
-                        choosed_cnt += 1
+                    if param_backing.chosen:
+                        chosen_cnt += 1
                         pass
                     pass
-                should_choosed += len(params)
+                should_chosen += len(params)
                 pass
 
-            if choosed_cnt == should_choosed and not _type.choosed:
+            if chosen_cnt == should_chosen and not _type.chosen:
                 sig = make_signature(_type, types)
-                if sig in choosed_types:
-                    _type.replaced_by = choosed_types[sig].addr
+                if sig in chosen_types:
+                    _type.replaced_by = chosen_types[sig].addr
                     replacing_cnt += 1
                 else:
-                    choosed_types[sig] = _type
-                    _type.choosed = True
+                    chosen_types[sig] = _type
+                    _type.chosen = True
                     choosing_cnt += 1
                     pass
                 pass
@@ -1002,24 +1002,24 @@ def handle_placeholder_replacement(subprograms, types, context):
 
 def remove_replaced_types(subprograms, types, context):
     # Remove replaced types and placeholders
-    non_choosed = 0
+    non_chosen = 0
     for addr in list(types.keys()):
         if types[addr].replaced_by >= 0:
-            if types[addr].choosed:
-                print('replaced choosed type', types[addr])
+            if types[addr].chosen:
+                print('replaced chosen type', types[addr])
                 pass
             del types[addr]
             pass
-        elif not types[addr].choosed:
-            if non_choosed < 3:
-                print('non choosed types:')
+        elif not types[addr].chosen:
+            if non_chosen < 3:
+                print('non chosen types:')
                 print(types[addr])
                 print('... and more')
                 pass
-            non_choosed += 1
+            non_chosen += 1
             pass
         pass
-    print(' non_choosed', non_choosed, end='')
+    print(' non_chosen', non_chosen, end='')
     pass
 
 def init_merge_set_of_types_with_placeholders(subprograms, types, context):
@@ -1187,7 +1187,7 @@ def replace_merge_sets(subprograms, types, context):
 def replace_merge_set(merge_set, types):
     # Find the representative type.
     rep_type = types[list(merge_set).pop()]
-    rep_type.choosed = True
+    rep_type.chosen = True
     # Replace all types in the merge set with the representative type.
     for addr in merge_set:
         if addr == rep_type.addr:
