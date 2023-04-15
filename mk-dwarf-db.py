@@ -1320,6 +1320,10 @@ type_process_phases = [
     merge_types,
     # Replace declaration types with definition types if possible.
     # And, we need to merge types again.
+    #
+    # All references (real_type, type, members, parameters) will point
+    # to a definition type if it pointed to a declaration type and
+    # found a definition with the same name as the declaration type.
     replace_declarations,
     # Handle placeholder pointing to replaced type before removing
     # them.
@@ -1327,6 +1331,7 @@ type_process_phases = [
     # Remove all replaced types to reduce the number of types going to
     # be processed by merge_types again.
     remove_replaced_types,
+    # Reset the 'chosen' flag before merging types again.
     unset_chosen,
     # Merge second time to handle replaced declaration types.
     merge_types,
