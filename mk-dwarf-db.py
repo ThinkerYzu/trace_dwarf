@@ -96,19 +96,13 @@ subprogram_tags = (MT_subprogram, MT_inlined_subroutine)
 ptr_tags = (MT_pointer, MT_ptr_to_member, MT_reference, MT_rvalue_reference)
 
 @dataclass(slots=True)
-class MemberInfo:
+class TypeCommonParam:
+    meta_type: int
     name: str = '<unknown>'
     linkage_name: str = ''
-    type: int = -1
+    value: int = -1
     offset: int = -1
     external: bool = False
-    pass
-
-@dataclass(slots=True)
-class ValueInfo:
-    name: str = '<unknown>'
-    linkage_name: str = ''
-    value: int = 0
     pass
 
 @dataclass(slots=True)
@@ -119,14 +113,25 @@ class TypeInfo:
     name: str = '<unknown>'
     linkage_name: str = ''
     declaration: bool = False
-    members: List[MemberInfo] = field(default_factory=list)
-    values: List[ValueInfo] = field(default_factory=list)
-    params: List[int] = field(default_factory=list)
+    members: bool = False
+    values: bool = False
+    params: bool = False
+    comm_params: List[TypeCommonParam] = field(default_factory=list)
     type: int = -1
     real_type: int = -1
     replaced_by: int = -1
     visited: int = -1
     choosed: bool = False
+    def choose_params(self, members=False, values=False, params=False):
+        if int(members) + int(values) + int(params) != 1:
+            raise ValueError('Only one of members, values, params can be True')
+        if (self.members, self.values, self.params) != (members, values, params) and \
+           (self.members, self.values, self.params) != (False, False, False):
+            raise ValueError('Params already choosed')
+        self.members = members
+        self.values = values
+        self.params = params
+        pass
     pass
 
 @dataclass(slots=True)
@@ -272,10 +277,10 @@ def persist_types_info(conn, types):
             continue
         type_id = type_info.id
         if type_info.members:
-            for member in type_info.members:
+            for member in type_info.comm_params:
                 conn.execute('insert into members values(?, ?, ?, ?)',
                              (type_id, get_symbol_name(member),
-                              get_real_type(member.type, types).id,
+                              get_real_type(member.value, types).id,
                               member.offset or 0))
                 pass
             pass
@@ -294,10 +299,10 @@ def persist_types_info(conn, types):
                           0))
             pass
         if type_info.params:
-            for i, param in enumerate(type_info.params):
+            for i, param in enumerate(type_info.comm_params):
                 conn.execute('insert into members values(?, ?, ?, ?)',
                              (type_id, str(i),
-                              get_real_type(param, types).id,
+                              get_real_type(param.value, types).id,
                               0))
                 pass
             pass
@@ -351,13 +356,10 @@ def parse_DIEs(lines):
     def tip_tag():
         if len(stk) == 0:
             return None
-        if isinstance(stk[-1], (TypeInfo, SubpInfo)):
-            return stk[-1].meta_type
-        if isinstance(stk[-1], MemberInfo):
-            return MT_member
-        if isinstance(stk[-1], ValueInfo):
-            return MT_enumerator
-        return stk[-1]['meta_type']
+        tip = stk[-1]
+        if isinstance(tip, (TypeInfo, SubpInfo, TypeCommonParam)):
+            return tip.meta_type
+        return tip['meta_type']
 
     for line in lines:
         dep_addr_die = is_DIE(line)
@@ -389,16 +391,18 @@ def parse_DIEs(lines):
                 stk.append(_type)
                 pass
             elif die == MT_member:
-                member_def = MemberInfo()
+                member_def = TypeCommonParam(MT_member)
                 stk.append(member_def)
                 enclosing_type = find_enclosing_type(stk)
-                enclosing_type.members.append(member_def)
+                enclosing_type.choose_params(members=True)
+                enclosing_type.comm_params.append(member_def)
                 pass
             elif die == MT_enumerator:
-                value_def = ValueInfo()
+                value_def = TypeCommonParam(MT_enumerator)
                 stk.append(value_def)
                 enclosing_type = find_enclosing_type(stk)
-                enclosing_type.values.append(value_def)
+                enclosing_type.choose_params(values=True)
+                enclosing_type.comm_params.append(value_def)
             else:
                 stk.append({'meta_type': die})
                 pass
@@ -474,7 +478,7 @@ def parse_DIEs(lines):
             if not attr_value:
                 continue
             attr, value = attr_value
-            member = find_enclosing_type(stk).members[-1]
+            member = find_enclosing_type(stk).comm_params[-1]
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
                 member.name = name
@@ -482,7 +486,7 @@ def parse_DIEs(lines):
                 name = fly_name(get_name(value))
                 member.linkage_name = name
             elif attr == 'DW_AT_type':
-                member.type = int(parse_addr_value(value), 16)
+                member.value = int(parse_addr_value(value), 16)
             elif attr == 'DW_AT_data_member_location':
                 member.offset = int(value, 16)
             elif attr == 'DW_AT_external':
@@ -496,17 +500,17 @@ def parse_DIEs(lines):
             attr, value = attr_value
             if attr == 'DW_AT_name':
                 name = fly_name(get_name(value))
-                find_enclosing_type(stk).values[-1].name = name
+                find_enclosing_type(stk).comm_params[-1].name = name
             elif attr == 'DW_AT_linkage_name':
                 name = fly_name(get_name(value))
-                find_enclosing_type(stk).values[-1].linkage_name = name
+                find_enclosing_type(stk).comm_params[-1].linkage_name = name
             elif attr == 'DW_AT_const_value':
                 if value.strip().startswith('0x'):
                     value = int(value, 16)
                 else:
                     value = int(value)
                     pass
-                find_enclosing_type(stk).values[-1].value = value
+                find_enclosing_type(stk).comm_params[-1].value = value
                 pass
             pass
         elif tip_tag() == 'DW_TAG_formal_parameter':
@@ -518,7 +522,11 @@ def parse_DIEs(lines):
             attr, value = attr_value
             if attr == 'DW_AT_type':
                 type_addr = int(parse_addr_value(value), 16)
-                find_enclosing_type(stk).params.append(type_addr)
+                p = TypeCommonParam(MT_formal_parameter)
+                p.value = type_addr
+                enclosing = find_enclosing_type(stk)
+                enclosing.choose_params(params=True)
+                enclosing.comm_params.append(p)
                 pass
             pass
         pass
@@ -565,17 +573,17 @@ def make_signature(_type, types):
         sig += ' ' + hex(_type.type)
     if _type.members:
         sig += ' {'
-        sig += ','.join([get_symbol_name(member) + ':' + hex(member.type)
-                         for member in _type.members])
+        sig += ','.join([get_symbol_name(member) + ':' + hex(member.value)
+                         for member in _type.comm_params])
         sig += '}'
     if _type.values:
         sig += ' {'
         sig += ','.join([get_symbol_name(value) + ':' + str(value.value)
-                         for value in _type.values])
+                         for value in _type.comm_params])
         sig += '}'
     if _type.params:
         sig += '('
-        sig += ','.join([hex(p) for p in _type.params])
+        sig += ','.join([hex(p.value) for p in _type.comm_params])
         sig += ')'
         pass
     return sig
@@ -599,18 +607,18 @@ def make_sig_recur(_type, types, lvl=0):
     if _type.members:
         sig += ' {'
         sig += ','.join([get_symbol_name(member) + ':' +
-                         make_sig_recur(types[member.type], types, lvl+1)
-                         for member in _type.members])
+                         make_sig_recur(types[member.value], types, lvl+1)
+                         for member in _type.comm_params])
         sig += '}'
     if _type.values:
         sig += ' {'
         sig += ','.join([get_symbol_name(value) + ':' + str(value.value)
-                         for value in _type.values])
+                         for value in _type.comm_params])
         sig += '}'
     if _type.params:
         sig += '('
-        sig += ','.join([make_sig_recur(types[param], types, lvl+1)
-                         for param in _type.params])
+        sig += ','.join([make_sig_recur(types[param.value], types, lvl+1)
+                         for param in _type.comm_params])
         sig += ')'
         pass
 
@@ -699,16 +707,16 @@ def break_circular_reference(subprograms, types, context):
             pass
         # 2.5. Repeat for each member of the type.
         if _type.members:
-            for member in _type.members:
+            for member in _type.comm_params:
                 # 2.5.1. Creat a task to process the member type. Add the
                 #        current type to the list of visited types of the
                 #        new task.
-                if member.type < 0:
+                if member.value < 0:
                     print(_type)
                     pass
                 if _type.meta_type != MT_union and member.offset < 0:
                     continue
-                tasks.append((types[member.type], visited.copy(), visited_set.copy(), start_addr))
+                tasks.append((types[member.value], visited.copy(), visited_set.copy(), start_addr))
                 pass
             pass
         if _type.type >= 0:
@@ -716,7 +724,7 @@ def break_circular_reference(subprograms, types, context):
             pass
         if _type.params:
             for param in _type.params:
-                tasks.append((types[param], visited.copy(), visited_set.copy(), start_addr))
+                tasks.append((types[param.value], visited.copy(), visited_set.copy(), start_addr))
                 pass
             pass
         pass
@@ -866,14 +874,18 @@ def init_transit_type_names(subprograms, types, context):
 # Dump the tree rooted at the given type.
 def dump_tree(_type, types, indent=0):
     print(' ' * indent + get_symbol_name(_type) + '@' + _type.addr + ' ' + _type.meta_type + '\tsig: ' + make_signature(_type, types))
-    for member in _type.members:
-        dump_tree(types[member.type], types, indent + 2)
+    if _type.members:
+        for member in _type.comm_params:
+            dump_tree(types[member.value], types, indent + 2)
+            pass
         pass
     if _type.type >= 0:
         dump_tree(types[_type.type], types, indent + 2)
         pass
-    for param in _type.params:
-        dump_tree(types[param], types, indent + 2)
+    if _type.params:
+        for param in _type.comm_params:
+            dump_tree(types[param.value], types, indent + 2)
+            pass
         pass
     pass
 
@@ -921,15 +933,15 @@ def merge_types(subprograms, types, context):
                 should_choosed += 1
                 pass
             if _type.members:
-                members = _type.members
+                members = _type.comm_params
                 for i in range(len(members)):
                     member = members[i]
-                    member_backing = types[member.type]
+                    member_backing = types[member.value]
                     if member_backing.replaced_by >= 0:
-                        member.type = member_backing.replaced_by
+                        member.value = member_backing.replaced_by
                         replacing_cnt += 1
                         pass
-                    member_backing = types[member.type]
+                    member_backing = types[member.value]
                     if member_backing.choosed:
                         choosed_cnt += 1
                         pass
@@ -939,10 +951,10 @@ def merge_types(subprograms, types, context):
             if _type.params:
                 params = _type.params
                 for i in range(len(params)):
-                    param = params[i]
+                    param = params[i].value
                     param_backing = types[param]
                     if param_backing.replaced_by >= 0:
-                        params[i] = param_backing.replaced_by
+                        params[i].value = param_backing.replaced_by
                         replacing_cnt += 1
                         pass
                     param_backing = types[param]
@@ -1122,15 +1134,15 @@ def find_dependent_merge_sets(_type, type_merge_sets, types):
         #      2.3.2. Add the tasks of the 'members' attribute if it
         #             exists.
         if task.members:
-            for member in task.members:
-                tasks.append(types[member.type])
+            for member in task.comm_params:
+                tasks.append(types[member.value])
                 pass
             pass
         #      2.3.3. Add the tasks of the 'params' attribute if it
         #             exists.
         if task.params:
-            for param in task.params:
-                tasks.append(types[param])
+            for param in task.comm_params:
+                tasks.append(types[param.value])
                 pass
             pass
         pass
@@ -1187,9 +1199,9 @@ def remove_external_members(subprograms, types, context):
     for _type in types.values():
         if not _type.members:
             continue
-        for i in range(len(_type.members) - 1, -1, -1):
-            if _type.members[i].external:
-                del _type.members[i]
+        for i in range(len(_type.comm_params) - 1, -1, -1):
+            if _type.comm_params[i].external:
+                del _type.comm_params[i]
                 pass
             pass
         pass
