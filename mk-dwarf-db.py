@@ -524,6 +524,7 @@ def parse_DIEs(lines):
                 type_addr = int(parse_addr_value(value), 16)
                 p = TypeCommonParam(MT_formal_parameter)
                 p.value = type_addr
+                p.name = str(len(enclosing_caller.comm_params))
                 enclosing = find_enclosing_type(stk)
                 enclosing.choose_params(params=True)
                 enclosing.comm_params.append(p)
@@ -890,13 +891,14 @@ def dump_tree(_type, types, indent=0):
     pass
 
 def merge_types(subprograms, types, context):
-    choosed_types = context.setdefault('choosed_types', {})
+    choosed_types = {}
     type_merge_sets = context.setdefault('type_merge_sets', {})
 
     for _type in types.values():
         if _type.meta_type in (MT_base, MT_unspecified):
-            if get_symbol_name(_type) in choosed_types:
-                _type.replaced_by = choosed_types[get_symbol_name(_type)].addr
+            name = get_symbol_name(_type)
+            if name in choosed_types:
+                _type.replaced_by = choosed_types[name].addr
             else:
                 choosed_types[get_symbol_name(_type)] = _type
                 _type.choosed = True
