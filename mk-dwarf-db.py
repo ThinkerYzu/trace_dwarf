@@ -1006,7 +1006,7 @@ def replace_declarations(subprograms, types, context):
                     if decl_name in chosen_types:
                         _type.type = chosen_types[decl_name].addr
                         backing.chosen = False
-                        backing.replaced_by = member.value
+                        backing.replaced_by = _type.type
                         pass
                     pass
                 pass
@@ -1032,7 +1032,7 @@ def replace_declarations(subprograms, types, context):
                     if decl_name in chosen_types:
                         _type.real_type = chosen_types[decl_name].addr
                         backing.chosen = False
-                        backing.replaced_by = member.value
+                        backing.replaced_by = _type.real_type
                         pass
                     pass
                 pass
