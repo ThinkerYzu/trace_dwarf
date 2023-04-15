@@ -825,6 +825,9 @@ def create_placeholder(addr, types):
     return placeholder_addr
 
 transit_tags = (MT_const, MT_volatile, MT_restrict)
+transit_sym_str = {MT_const: 'const',
+                   MT_volatile: 'volatile',
+                   MT_restrict: 'restrict'}
 
 # Give a name to unnamed transit types.
 #
@@ -857,7 +860,7 @@ def init_transit_type_names(subprograms, types, context):
             if get_symbol_name(_type) != '<unknown>':
                 break
             # 1.2.1. Append the 'meta_type' to the new name.
-            new_name = new_name + ' ' + MT_table_rev[_type.meta_type]
+            new_name = new_name + ' ' + transit_sym_str[_type.meta_type]
             # 1.2.2. Follow the 'type' field.
             _type = types[_type.type]
             pass
