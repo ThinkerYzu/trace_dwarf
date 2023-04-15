@@ -984,6 +984,62 @@ def merge_types(subprograms, types, context):
         pass
     pass
 
+# Replace all references to a declaration to a definition type.
+#
+# We use the first chosen type that has the same name instead.
+def replace_declarations(subprograms, types, context):
+    chosen_types = {}
+    for _type in types.values():
+        if _type.chosen and not _type.declaration:
+            chosen_types[get_symbol_name(_type)] = _type
+            pass
+        pass
+    # Replace all references to a declaration to a definition type for
+    # each chosen type.
+    for _type in types.values():
+        if _type.chosen and not _type.declaration:
+            # Check type, members, params, and real_type.
+            if _type.type >= 0:
+                backing = types[_type.type]
+                if backing.declaration:
+                    decl_name = get_symbol_name(backing)
+                    if decl_name in chosen_types:
+                        _type.type = chosen_types[decl_name].addr
+                        backing.chosen = False
+                        backing.replaced_by = member.value
+                        pass
+                    pass
+                pass
+            if _type.members or _type.params:
+                members = _type.comm_params
+                for i in range(len(members)):
+                    member = members[i]
+                    member_backing = types[member.value]
+                    if member_backing.declaration:
+                        decl_name = get_symbol_name(member_backing)
+                        if decl_name in chosen_types:
+                            member.value = chosen_types[get_symbol_name(member_backing)].addr
+                            member_backing.chosen = False
+                            member_backing.replaced_by = member.value
+                            pass
+                        pass
+                    pass
+                pass
+            if _type.real_type >= 0:
+                backing = types[_type.real_type]
+                if backing.declaration:
+                    decl_name = get_symbol_name(backing)
+                    if decl_name in chosen_types:
+                        _type.real_type = chosen_types[decl_name].addr
+                        backing.chosen = False
+                        backing.replaced_by = member.value
+                        pass
+                    pass
+                pass
+            pass
+        pass
+    pass
+
 def dump_types(subprograms, types, context):
     # For debugging
     pass
@@ -1020,6 +1076,12 @@ def remove_replaced_types(subprograms, types, context):
             pass
         pass
     print(' non_chosen', non_chosen, end='')
+    pass
+
+def unset_chosen(subprograms, types, context):
+    for _type in types.values():
+        _type.chosen = False
+        pass
     pass
 
 def init_merge_set_of_types_with_placeholders(subprograms, types, context):
@@ -1256,8 +1318,21 @@ type_process_phases = [
     divide_merge_sets_dep,
     replace_merge_sets,
     merge_types,
+    # Replace declaration types with definition types if possible.
+    # And, we need to merge types again.
+    replace_declarations,
+    # Handle placeholder pointing to replaced type before removing
+    # them.
+    handle_placeholder_replacement,
+    # Remove all replaced types to reduce the number of types going to
+    # be processed by merge_types again.
+    remove_replaced_types,
+    unset_chosen,
+    # Merge second time to handle replaced declaration types.
+    merge_types,
     dump_types,
     handle_placeholder_replacement,
+    # Rmove all replaced types and placeholders.
     remove_replaced_types,
 ]
 
