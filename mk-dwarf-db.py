@@ -1030,107 +1030,6 @@ def merge_types(subprograms, types, context):
         pass
     pass
 
-# Replace all references to a declaration to a definition type.
-#
-# We use the first chosen type that has the same name instead.
-def replace_declarations(subprograms, types, context):
-    chosen_types = {}
-    for _type in types.values():
-        if _type.chosen and not _type.declaration:
-            decl_name = MT_table_rev[_type.meta_type] + ' ' + get_symbol_name(_type)
-            chosen_types[decl_name] = _type
-            pass
-        pass
-    # Replace all references to a declaration to a definition type for
-    # each chosen type.
-    for _type in types.values():
-        if _type.chosen and not _type.declaration:
-            # Check type, members, params, and real_type.
-            if _type.type >= 0:
-                backing = types[_type.type]
-                if backing.declaration:
-                    decl_name = MT_table_rev[backing.meta_type] + ' ' + get_symbol_name(backing)
-                    if decl_name in chosen_types:
-                        _type.type = chosen_types[decl_name].addr
-                        backing.chosen = False
-                        backing.replaced_by = _type.type
-                        pass
-                    pass
-                pass
-            if _type.members or _type.params:
-                members = _type.comm_params
-                for i in range(len(members)):
-                    member = members[i]
-                    member_backing = types[member.value]
-                    if member_backing.declaration:
-                        decl_name = MT_table_rev[member_backing.meta_type] + ' ' + get_symbol_name(member_backing)
-                        if decl_name in chosen_types:
-                            member.value = chosen_types[decl_name].addr
-                            member_backing.chosen = False
-                            member_backing.replaced_by = member.value
-                            pass
-                        pass
-                    pass
-                pass
-            if _type.real_type >= 0:
-                backing = types[_type.real_type]
-                if backing.declaration:
-                    decl_name = MT_table_rev[backing.meta_type] + ' ' + get_symbol_name(backing)
-                    if decl_name in chosen_types:
-                        _type.real_type = chosen_types[decl_name].addr
-                        backing.chosen = False
-                        backing.replaced_by = _type.real_type
-                        pass
-                    pass
-                pass
-            pass
-        pass
-    # Set the 'replaced_by' attributes to chosen type if it is not a
-    # chosen type.
-    #
-    # Since we turn chosen to not-chosen when we replace a declaration
-    # to a definition, we need to check and set the 'replaced_by'
-    # attribute to the chosen type.
-    for _type in types.values():
-        # For 'type' attribute
-        if _type.type >= 0:
-            backing = types[_type.type]
-            while not backing.chosen:
-                _type.type = backing.replaced_by
-                backing = types[_type.type]
-                pass
-            pass
-        # For 'members' and 'parameters' attributes
-        if _type.members or _type.params:
-            members = _type.comm_params
-            for i in range(len(members)):
-                member = members[i]
-                member_backing = types[member.value]
-                while not member_backing.chosen:
-                    member.value = member_backing.replaced_by
-                    member_backing = types[member.value]
-                    pass
-                pass
-            pass
-        # For 'real_type' attribute
-        if _type.real_type >= 0:
-            backing = types[_type.real_type]
-            while not backing.chosen:
-                _type.real_type = backing.replaced_by
-                backing = types[_type.real_type]
-                pass
-            pass
-        # For 'replaced_by' attribute
-        if _type.replaced_by >= 0:
-            backing = types[_type.replaced_by]
-            while not backing.chosen:
-                _type.replaced_by = backing.replaced_by
-                backing = types[_type.replaced_by]
-                pass
-            pass
-        pass
-    pass
-
 def dump_types(subprograms, types, context):
     # For debugging
     pass
@@ -1407,7 +1306,88 @@ def set_call_names(subprograms, types, context):
         pass
     pass
 
+# Replace references to declarations with definitions.
+#
+# For every reference pointing to a declaration type, find a
+# definition and point to it instead.
+#
+# A reference is a member, parameter, or type of a type.  A definition
+# of a declaration is a type that is not a declaration and have the
+# same meta type and name.
+def replace_declaration_refs(subprograms, types, context):
+    # Collect definition types to create a map from meta type and name
+    # pairs to types.
+    def_types = {}
+    is_declaration = lambda _type: _type.declaration
+    for _type in types.values():
+        if is_declaration(_type):
+            continue
+        key = (_type.meta_type, get_symbol_name(_type))
+        if key not in def_types:
+            # We only need one definition type for each meta type and
+            # name pair.
+            def_types[key] = _type
+            pass
+        pass
+    # Replace references to declarations with definitions.
+    #
+    # The visisted references should be labeled with a non-negative
+    # visited value.  The visited value is used to remove unused
+    # declaration types later.
+    for _type in types.values():
+        if is_declaration(_type):
+            continue
+        replace_declaration_refs_type(_type, def_types, types)
+        pass
+
+    # Remove unused declaration types which is not pointed to by any
+    # definition type from 'types'.  The visited value is used to
+    # determine if a declaration type is pointed to by a definition
+    # type. If the visited value is non-negative, the declaration type
+    # is not pointed to by any definition type.
+    for _type in list(types.values()):
+        if not is_declaration(_type):
+            continue
+        if _type.visited >= 0:
+            del types[_type.addr]
+            pass
+        pass
+    pass
+
+def replace_declaration_refs_type(_type, def_types, types):
+    # Replace the type of the type if it is a declaration.
+    if _type.type >= 0:
+        _type.type = replace_declaration_ref(_type.type, def_types, types)
+        pass
+    # Replace the members of the type.
+    if _type.members:
+        for member in _type.comm_params:
+            member.value = replace_declaration_ref(member.value, def_types, types)
+            pass
+        pass
+    # Replace the parameters of the type.
+    if _type.params:
+        for param in _type.comm_params:
+            param.value = replace_declaration_ref(param.value, def_types, types)
+            pass
+        pass
+    pass
+
+def replace_declaration_ref(addr, def_types, types):
+    _type = types[addr]
+    if not _type.declaration:
+        return addr
+    key = (_type.meta_type, get_symbol_name(_type))
+    if key not in def_types:
+        return addr
+    # Since the declaration type has a definition found, we can remove
+    # it from 'types' later by setting the visited value to a
+    # non-negative value.
+    _type.visited = 1
+    return def_types[key].addr
+
 type_process_phases = [
+    replace_declaration_refs,
     redirect_calls_to_origin,
     borrow_name_from_specification,
     set_call_names,
@@ -1419,33 +1399,8 @@ type_process_phases = [
     divide_merge_sets_dep,
     replace_merge_sets,
     merge_types,
-
-    # Replace declaration types with definition types if possible.
-    # And, we need to merge types again.
-    #
-    # All references (real_type, type, members, parameters) will point
-    # to a definition type if it pointed to a declaration type and
-    # found a definition with the same name as the declaration type.
-    replace_declarations,
-
-    # Handle placeholder pointing to replaced type before removing
-    # them.
-    handle_placeholder_replacement,
-    # Remove all replaced types to reduce the number of types going to
-    # be processed by merge_types again.
-    remove_replaced_types,
-    # Reset the 'chosen' flag before merging types again.
-    unset_chosen,
-    break_circular_reference,
-    init_merge_set_of_types_with_placeholders,
-    divide_merge_sets_sig,
-    divide_merge_sets_dep,
-    replace_merge_sets,
-    # Merge second time to handle replaced declaration types.
-    merge_types,
     dump_types,
     handle_placeholder_replacement,
-    # Rmove all replaced types and placeholders.
     remove_replaced_types,
 ]
 
