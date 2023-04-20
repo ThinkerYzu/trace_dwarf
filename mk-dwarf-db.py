@@ -124,6 +124,7 @@ class TypeInfo:
     replaced_by: int = -1
     visited: int = -1
     chosen: bool = False
+    to_loop_head: bool = False
     def choose_params(self, members=False, values=False, params=False):
         if int(members) + int(values) + int(params) != 1:
             raise ValueError('Only one of members, values, params can be True')
@@ -625,7 +626,7 @@ def make_signature(_type, types):
     return sig
 
 def make_sig_recur(_type, types, lvl=0):
-    if lvl == 100:
+    if lvl == 200:
         raise 'too deep'
     if _type.meta_type == MT_placeholder:
         return get_symbol_name(_type)
@@ -679,10 +680,10 @@ def make_sig_recur(_type, types, lvl=0):
 #    2.1. Pop a task from the list.
 #    2.2. If the type is marked as visited and with the same start addr,
 #         skip it.
-#    2.3. Mark the type as visited.
-#    2.4. If the type is in the list of visited types,
+#    2.3. If the type has been visited from the current start addr,
 #         replace a pointer type with a placeholder type to break
 #         the circular reference.
+#    2.4. Mark the type as visited.
 #    2.5. Repeat for each member of the type.
 #         2.5.1. Creat a task to process the member type. Add the current
 #                type to the list of visited types of the new task.
@@ -693,27 +694,20 @@ def break_circular_reference(subprograms, types, context):
     if len(types) == 0:
         return
 
-    for _type in types.values():
-        _type.visited = -1
-        if _type.meta_type == MT_placeholder:
-            placeholder_names.add(get_symbol_name(types[_type.real_type]))
-            pass
-        pass
-
     tpiter = iter(list(types.keys()))
     # 1. Create a list of tasks of types to be processed. Each task is a tuple
     #    of a type and a list of visited types.
     start_addr = next(tpiter)
-    tasks = [(types[start_addr], [], set(), start_addr)]
+    tasks = [(types[start_addr], [], start_addr)]
     # 2. Repeat until all tasks are done:
     pop_cnt = 0
     while tasks:
         # 2.1. Pop a task from the list.
-        _type, visited, visited_set, start_addr = tasks.pop()
+        _type, visited, start_addr = tasks.pop()
         if not tasks:
             try:
                 next_start_addr = next(tpiter)
-                tasks.append((types[next_start_addr], [], set(), next_start_addr))
+                tasks.append((types[next_start_addr], [], next_start_addr))
             except StopIteration:
                 pass
             else:
@@ -727,12 +721,10 @@ def break_circular_reference(subprograms, types, context):
         #      addr, skip it.
         if _type.visited >= 0 and _type.visited != start_addr:
             continue
-        # 2.3. Mark the type as visited.
-        _type.visited = start_addr
-        # 2.4. If the type is in the list of visited types,
+        # 2.3. If the type has been visited from the current start addr,
         #      replace a pointer type with a placeholder type to break
         #      the circular reference.
-        if _type.addr in visited_set:
+        if _type.visited == start_addr:
             path_lst = []
             while isinstance(visited[0], list):
                 path_lst.append(visited[1:])
@@ -741,10 +733,19 @@ def break_circular_reference(subprograms, types, context):
             path_lst.append(visited)
             path_lst.reverse()
             visited = list(itertools.chain(*path_lst))
-            circular_path = visited[visited.index(_type.addr):]
-            break_circular_path(circular_path, types, placeholder_names)
-            continue
-        visited_set.add(_type.addr)
+            try:
+                circular_path = visited[visited.index(_type.addr):]
+            except ValueError:
+                if not _type.to_loop_head:
+                    continue
+                pass
+            else:
+                break_circular_path(circular_path, types, placeholder_names)
+                continue
+            pass
+        # 2.4. Mark the type as visited.
+        _type.visited = start_addr
+
         visited.append(_type.addr)
         if len(visited) >= 1024:
             visisted = [visited]
@@ -758,17 +759,17 @@ def break_circular_reference(subprograms, types, context):
                 if member.value < 0:
                     print(_type)
                     pass
-                if _type.meta_type != MT_union and member.offset < 0:
-                    continue
-                tasks.append((types[member.value], visited.copy(), visited_set.copy(), start_addr))
+                #if _type.meta_type != MT_union and member.offset < 0:
+                #    continue
+                tasks.append((types[member.value], visited.copy(), start_addr))
                 pass
             pass
         if _type.type >= 0:
-            tasks.append((types[_type.type], visited.copy(), visited_set.copy(), start_addr))
+            tasks.append((types[_type.type], visited.copy(), start_addr))
             pass
         if _type.params:
             for param in _type.comm_params:
-                tasks.append((types[param.value], visited.copy(), visited_set.copy(), start_addr))
+                tasks.append((types[param.value], visited.copy(), start_addr))
                 pass
             pass
         pass
@@ -790,21 +791,19 @@ def break_circular_reference(subprograms, types, context):
 #
 # Steps:
 # 1. Create a list of pointer types pointing to a type having a name.
-# 2. Sort the list by the name of the pointed type.
-# 3. Replace the pointed type of the first pointer type in the list
-#    with a placeholder type.
+# 2. Replace the pointed type of the last pointer type in the list
+#    with a placeholder type.  It make sure we break as many furture
+#    loops as possible.
+# 3. Mark all types following the last pointer type in the list as
+#    to_loop_head.
 # 4. Stop.
 def break_circular_path(circular_path, types, placeholder_names):
-    if try_existing_placeholders(circular_path, types, placeholder_names):
-        return
     # 1. Create a list of pointer types pointing to a type having a name.
     ptrs = []
     for addr in circular_path:
         _type = types[addr]
         if _type.meta_type in ptr_tags and \
            get_symbol_name(types[_type.type]) != '<unknown>':
-            if types[_type.type].meta_type == MT_placeholder:
-                return
             ptrs.append(_type)
             pass
         pass
@@ -812,33 +811,19 @@ def break_circular_path(circular_path, types, placeholder_names):
         print('No pointer type found in the circular path')
         print([types[addr] for addr in circular_path])
         pass
-    # 2. Sort the list by the name of the pointed type.
-    ptrs.sort(key=lambda ptr: get_symbol_name(types[ptr.type]))
-    # 3. Replace the pointed type of the first pointer type in the list
-    #    with a placeholder type.
-    ptr = ptrs[0]
+    # 2. Replace the pointed type of the last pointer type in the list
+    #    with a placeholder type.  It make sure we break as many
+    #    furture loops as possible.
+    ptr = ptrs[-1]
     placeholder_names.add(get_symbol_name(types[ptr.type]))
     ptr.type = create_placeholder(ptr.type, types)
+    # 3. Mark all types following the last pointer type in the list as
+    #    to_loop_head.
+    for addr in circular_path[circular_path.index(ptr.addr) + 1:]:
+        types[addr].to_loop_head = True
+        pass
     # 4. Stop.
     pass
-
-# Try to use existing placeholders to break the circular reference.
-#
-# If a pointer type pointing to a type having a name that is the name
-# of another type, and a placeholder has been created for that type,
-# we will create a placeholder for the pointed type and replace the
-# pointed type with the placeholder.
-def try_existing_placeholders(circular_path, types, placeholder_names):
-    for addr in circular_path:
-        _type = types[addr]
-        if _type.meta_type not in ptr_tags:
-            continue
-        pointed_type = types[_type.type]
-        if get_symbol_name(pointed_type) in placeholder_names:
-            _type.type = create_placeholder(_type.type, types)
-            return True
-        pass
-    return False
 
 # Create a placholders for each pointer type pointing to a
 # non-placholder type but with a name in the set of placholder names.
@@ -941,12 +926,14 @@ def merge_types(subprograms, types, context):
     type_merge_sets = context.setdefault('type_merge_sets', {})
 
     for _type in types.values():
+        if _type.chosen or _type.replaced_by >= 0:
+            continue
         if _type.meta_type in (MT_base, MT_unspecified):
             name = get_symbol_name(_type)
             if name in chosen_types:
                 _type.replaced_by = chosen_types[name].addr
             else:
-                chosen_types[get_symbol_name(_type)] = _type
+                chosen_types[name] = _type
                 _type.chosen = True
                 pass
             pass
@@ -963,6 +950,11 @@ def merge_types(subprograms, types, context):
         for _type in types.values():
             if _type.replaced_by >= 0:
                 continue
+            # If the type is already chosen, skip it.  But if the type
+            # is in type_merge_sets, we don't skip it because we can
+            # not register it in chosen_types at the beginning of this
+            # function.  It is because the signature of the type is
+            # still changing.  Its dependencies may be replaced.
             if _type.chosen and _type.addr not in type_merge_sets:
                 continue
 
@@ -1070,12 +1062,6 @@ def remove_replaced_types(subprograms, types, context):
             pass
         pass
     print(' non_chosen', non_chosen, end='')
-    pass
-
-def unset_chosen(subprograms, types, context):
-    for _type in types.values():
-        _type.chosen = False
-        pass
     pass
 
 def init_merge_set_of_types_with_placeholders(subprograms, types, context):
