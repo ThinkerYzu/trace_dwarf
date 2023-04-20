@@ -1454,5 +1454,6 @@ def main():
 if __name__ == '__main__':
     start_time = time.time()
     main()
-    print('Total time: %.2f seconds' % (time.time() - start_time))
+    tm_delta = time.time() - start_time
+    print('Total time: %.2f seconds (%.2f minutes)' % (tm_delta, tm_delta / 60))
     pass
