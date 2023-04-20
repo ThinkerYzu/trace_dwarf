@@ -759,8 +759,6 @@ def break_circular_reference(subprograms, types, context):
                 if member.value < 0:
                     print(_type)
                     pass
-                #if _type.meta_type != MT_union and member.offset < 0:
-                #    continue
                 tasks.append((types[member.value], visited.copy(), start_addr))
                 pass
             pass
@@ -798,12 +796,19 @@ def break_circular_reference(subprograms, types, context):
 #    to_loop_head.
 # 4. Stop.
 def break_circular_path(circular_path, types, placeholder_names):
+    if try_existing_placeholders(circular_path, types, placeholder_names):
+        return
     # 1. Create a list of pointer types pointing to a type having a name.
     ptrs = []
     for addr in circular_path:
         _type = types[addr]
         if _type.meta_type in ptr_tags and \
            get_symbol_name(types[_type.type]) != '<unknown>':
+            if types[_type.type].meta_type == MT_placeholder:
+                for addr in circular_path[circular_path.index(_type.addr) + 1:]:
+                    types[addr].to_loop_head = True
+                    pass
+                return
             ptrs.append(_type)
             pass
         pass
@@ -824,6 +829,27 @@ def break_circular_path(circular_path, types, placeholder_names):
         pass
     # 4. Stop.
     pass
+
+# Try to use existing placeholders to break the circular reference.
+#
+# If a pointer type pointing to a type having a name that is the name
+# of another type, and a placeholder has been created for that type,
+# we will create a placeholder for the pointed type and replace the
+# pointed type with the placeholder.
+def try_existing_placeholders(circular_path, types, placeholder_names):
+    for addr in circular_path:
+        _type = types[addr]
+        if _type.meta_type not in ptr_tags:
+            continue
+        pointed_type = types[_type.type]
+        if get_symbol_name(pointed_type) in placeholder_names:
+            _type.type = create_placeholder(_type.type, types)
+            for addr in circular_path[circular_path.index(_type.addr) + 1:]:
+                types[addr].to_loop_head = True
+                pass
+            return True
+        pass
+    return False
 
 # Create a placholders for each pointer type pointing to a
 # non-placholder type but with a name in the set of placholder names.
