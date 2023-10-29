@@ -163,19 +163,20 @@ def draw_types(db, type_ids, max_levels,
                exclude_types, strict_exclude_types,
                highlight_types,
                show_id=False):
-    tasks = [(Type(db, type_id), to_descendant, 0)
+    tasks = [(Type(db, type_id), to_descendant, 0, None)
              for type_id, to_descendant in type_ids]
     visited = set()
     has_labels = set()
     while tasks:
-        _type, to_descendant, lvl = tasks.pop(0)
+        _type, to_descendant, lvl, prev = tasks.pop(0)
         if not to_descendant:
             if _type.name in strict_exclude_types or ('@' + str(_type.id)) in exclude_types:
                 continue
             if lvl > max_levels and max_levels > 0 and not to_descendant:
                 continue
             pass
-        if _type.id in visited:
+        type_visited = lvl > 0 and _type.id in visited
+        if to_descendant and type_visited:
             continue
         visited.add(_type.id)
         if _type.id not in has_labels:
@@ -186,10 +187,14 @@ def draw_types(db, type_ids, max_levels,
             continue
         for member in _type.members:
             member_type = Type(db, member.type_id)
+            if member_type.name in strict_exclude_types or ('@' + str(member_type.id)) in exclude_types:
+                continue
             if to_descendant:
                 if in_set(member_type, strict_exclude_types):
                     continue
                 pass
+            elif member_type.id != prev:
+                continue
             if _type.meta_type not in transit_types:
                 if member_type.meta_type == 'DW_TAG_base_type':
                     continue
@@ -215,15 +220,17 @@ def draw_types(db, type_ids, max_levels,
                 if to_descendant:
                     if in_set(member_type, exclude_types):
                         continue
-                    tasks.append((member_type, to_descendant, lvl + 1))
+                    tasks.append((member_type, to_descendant, lvl + 1, None))
                     pass
                 pass
             pass
         if not to_descendant:
+            if type_visited:
+                continue
             if _type.name in exclude_types or ('@' + str(_type.id)) in exclude_types:
                 continue
             for dependant_id in get_dependant_ids(db, _type.id):
-                tasks.append((Type(db, dependant_id), to_descendant, lvl + 1))
+                tasks.append((Type(db, dependant_id), to_descendant, lvl + 1, _type.id))
                 pass
             pass
         pass
