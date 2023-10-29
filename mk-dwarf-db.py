@@ -697,19 +697,16 @@ def break_circular_reference(subprograms, types, context):
     tpiter = iter(list(types.keys()))
     # 1. Create a list of tasks of types to be processed. Each task is a tuple
     #    of a type and a list of visited types.
-    start_addr = next(tpiter)
-    tasks = [(types[start_addr], [], start_addr)]
+    tasks = []
     # 2. Repeat until all tasks are done:
     pop_cnt = 0
-    while tasks:
-        # 2.1. Pop a task from the list.
-        _type, visited, start_addr = tasks.pop()
+    while True:
         if not tasks:
             try:
                 next_start_addr = next(tpiter)
                 tasks.append((types[next_start_addr], [], next_start_addr))
             except StopIteration:
-                pass
+                break
             else:
                 pop_cnt += 1
                 if pop_cnt % 10000 == 0:
@@ -717,6 +714,8 @@ def break_circular_reference(subprograms, types, context):
                     pass
                 pass
             pass
+        # 2.1. Pop a task from the list.
+        _type, visited, start_addr = tasks.pop()
         # 2.2. If the type is marked as visited and with same start
         #      addr, skip it.
         if _type.visited >= 0 and _type.visited != start_addr:
@@ -925,6 +924,7 @@ def init_transit_type_names(subprograms, types, context):
         new_name = new_name + ' ' + get_symbol_name(_type)
         # 1.5. Set the 'name' field of the processing type to the new name.
         processing.name = new_name.strip()
+        processing.linkage_name = processing.name
         pass
     # 2. Stop.
     pass
