@@ -1314,8 +1314,8 @@ def redirect_calls_to_origin(subprograms, types, context):
         for i, callee in enumerate(caller.calls):
             while subprograms[callee].origin >= 0:
                 callee = subprograms[callee].origin
-                caller.calls[i] = callee
                 pass
+            caller.calls[i] = callee
             pass
         pass
     pass
@@ -1412,10 +1412,11 @@ def replace_declaration_ref(addr, def_types, types):
     return def_types[key].addr
 
 type_process_phases = [
-    replace_declaration_refs,
     redirect_calls_to_origin,
     borrow_name_from_specification,
     set_call_names,
+
+    replace_declaration_refs,
     remove_external_members,
     init_transit_type_names,
     break_circular_reference,
