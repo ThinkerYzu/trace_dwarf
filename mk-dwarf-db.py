@@ -747,7 +747,7 @@ def break_circular_reference(subprograms, types, context):
 
         visited.append(_type.addr)
         if len(visited) >= 1024:
-            visisted = [visited]
+            visited = [visited]
             pass
         # 2.5. Repeat for each member of the type.
         if _type.members:
@@ -803,11 +803,6 @@ def break_circular_path(circular_path, types, placeholder_names):
         _type = types[addr]
         if _type.meta_type in ptr_tags and \
            get_symbol_name(types[_type.type]) != '<unknown>':
-            if types[_type.type].meta_type == MT_placeholder:
-                for addr in circular_path[circular_path.index(_type.addr) + 1:]:
-                    types[addr].to_loop_head = True
-                    pass
-                return
             ptrs.append(_type)
             pass
         pass
@@ -842,7 +837,9 @@ def try_existing_placeholders(circular_path, types, placeholder_names):
             continue
         pointed_type = types[_type.type]
         if get_symbol_name(pointed_type) in placeholder_names:
-            _type.type = create_placeholder(_type.type, types)
+            if pointed_type.meta_type != MT_placeholder:
+                _type.type = create_placeholder(_type.type, types)
+                pass
             for addr in circular_path[circular_path.index(_type.addr) + 1:]:
                 types[addr].to_loop_head = True
                 pass
@@ -876,6 +873,50 @@ def create_placeholder(addr, types):
     placeholder.real_type = addr
     types[placeholder_addr] = placeholder
     return placeholder_addr
+
+def check_circular(subprograms, types, context):
+    for _type in types.values():
+        _type.visited = -1
+        pass
+    tasks = []
+    typeiter = iter(types.values())
+    while True:
+        if not tasks:
+            try:
+                tasks.append((next(typeiter), []))
+            except StopIteration:
+                break
+            pass
+        _type, visited = tasks.pop()
+        if _type.visited >= 0:
+            if _type.addr in visited:
+                raise Exception(f'circular type {get_symbol_name(_type)}')
+            continue
+        _type.visited = 1
+        visited.append(_type.addr)
+
+        # 2.5. Repeat for each member of the type.
+        if _type.members:
+            for member in _type.comm_params:
+                # 2.5.1. Creat a task to process the member type. Add the
+                #        current type to the list of visited types of the
+                #        new task.
+                if member.value < 0:
+                    print(_type)
+                    pass
+                tasks.append((types[member.value], visited.copy()))
+                pass
+            pass
+        if _type.type >= 0:
+            tasks.append((types[_type.type], visited.copy()))
+            pass
+        if _type.params:
+            for param in _type.comm_params:
+                tasks.append((types[param.value], visited.copy()))
+                pass
+            pass
+        pass
+    pass
 
 transit_tags = (MT_const, MT_volatile, MT_restrict)
 transit_sym_str = {MT_const: 'const',
@@ -1156,7 +1197,6 @@ def divide_merge_set_dep(merge_set, type_merge_sets, types):
             deps[dep] = set()
             pass
         deps[dep].add(addr)
-        type_merge_sets[_type.addr] = deps[dep]
         pass
     if len(deps) > 1:
         cnt = 0
@@ -1255,6 +1295,12 @@ def divide_merge_sets_dep(subprograms, types, context):
         if len(new_merge_sets) == len(merge_sets):
             break
         merge_sets = new_merge_sets
+        # update type_merge_sets
+        for merge_set in merge_sets:
+            for addr in merge_set:
+                type_merge_sets[addr] = merge_set
+                pass
+            pass
         pass
     context['merge_sets'] = new_merge_sets
     print(': merge_sets', len(new_merge_sets), end='')
@@ -1356,7 +1402,7 @@ def replace_declaration_refs(subprograms, types, context):
         pass
     # Replace references to declarations with definitions.
     #
-    # The visisted references should be labeled with a non-negative
+    # The visited references should be labeled with a non-negative
     # visited value.  The visited value is used to remove unused
     # declaration types later.
     for _type in types.values():
@@ -1420,6 +1466,7 @@ type_process_phases = [
     remove_external_members,
     init_transit_type_names,
     break_circular_reference,
+    check_circular,
     init_merge_set_of_types_with_placeholders,
     divide_merge_sets_sig,
     divide_merge_sets_dep,
