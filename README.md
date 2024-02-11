@@ -7,8 +7,7 @@ mk-dwarf-db.py.
 
 The following lines build a database for the Linux kernel.
 
-    objdump --dwarf=info vmlinux > dwarf.data
-    mk-dwarf-db.py dwarf.data
+    mk-dwarf-db.py vmlinux
 
 It generates a database called callgraph.sqlite3.  Now, you can use
 this database to create call flow diagrams.  For sure, you should
@@ -86,16 +85,8 @@ A highlighted function or type will be in red.
 
  - python
  - sqlite3
- - objdump (binutils)
+ - pyelftools
  - dot (graphviz)
 
 ## TODOs
 Improve the performance of mk-dwarf-db.py.
-
-## Warning
-
-This tools parses the output of objdump.  The format may change.  And,
-DWARF is too flexible so that TAG and ATTRIBUTES may changes from one
-platform to another.  It may also vary with different versions of
-toolchains.
-
