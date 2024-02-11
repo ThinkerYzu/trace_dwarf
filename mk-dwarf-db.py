@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sqlite3
 import sys
-import re
 import optparse
 import os
 import time
@@ -11,12 +10,6 @@ from pprint import pprint
 from dataclasses import dataclass, field
 from typing import List
 from elftools.elf.elffile import ELFFile
-
-DIE_reo = re.compile(r'^ ?<\d+><(\d|[a-f])+>: Abbrev Number: \d+.*$')
-DIE_tag_reo = re.compile(r'.*<(\d+)><([0-9a-f]+)>: Abbrev Number: \d+ \((\w+)\).*')
-ATTR_reo = re.compile(r'^ *<[0-9a-f]+> +(DW_AT_\w+) *: (.*)$')
-abstract_reo = re.compile('<0x([0-9a-f]+)>')
-addr_reo = re.compile('<0x([0-9a-f]+)>')
 
 origin_attrs = ('DW_AT_abstract_origin', 'DW_AT_call_origin')
 
@@ -156,35 +149,6 @@ class NSInfo:
     addr: int
     meta_type: int
     name: str = '<unknown>'
-    pass
-
-def is_DIE(line):
-    if DIE_reo.match(line):
-        tag_mo = DIE_tag_reo.match(line)
-        if tag_mo:
-            return int(tag_mo.group(1)), tag_mo.group(2), tag_mo.group(3)
-        return 0, '0', '0'
-    return None
-
-def parse_attr(line):
-    mo = ATTR_reo.match(line)
-    if mo:
-        return mo.group(1), mo.group(2)
-    pass
-
-def get_name(value):
-    return value.split('):')[-1].strip()
-
-def parse_abstract_origin(value):
-    mo = abstract_reo.match(value)
-    if mo:
-        return mo.group(1)
-    pass
-
-def parse_addr_value(value):
-    mo = addr_reo.match(value)
-    if mo:
-        return mo.group(1)
     pass
 
 def find_enclosing_caller(stk):
