@@ -10,6 +10,7 @@ import hashlib
 from pprint import pprint
 from dataclasses import dataclass, field
 from typing import List
+from elftools.elf.elffile import ELFFile
 
 DIE_reo = re.compile(r'^ ?<\d+><(\d|[a-f])+>: Abbrev Number: \d+.*$')
 DIE_tag_reo = re.compile(r'.*<(\d+)><([0-9a-f]+)>: Abbrev Number: \d+ \((\w+)\).*')
@@ -187,13 +188,13 @@ def parse_addr_value(value):
     pass
 
 def find_enclosing_caller(stk):
-    for i in range(len(stk)-2, -1, -1):
+    for i in range(len(stk) - 1, -1, -1):
         if isinstance(stk[i], SubpInfo):
             return stk[i]
     return None
 
 def find_enclosing_type(stk):
-    for i in range(len(stk)-2, -1, -1):
+    for i in range(len(stk) - 1, -1, -1):
         if isinstance(stk[i], TypeInfo) and stk[i].meta_type in type_tags:
             return stk[i]
     return None
@@ -330,20 +331,229 @@ def persist_info(subprograms, types, filename):
     conn.close()
     pass
 
-def parse_DIEs(lines):
-    subprograms = {}
+def prepend_namespace(name, stk):
+    for i in range(len(stk) - 1, -1, -1):
+        if isinstance(stk[i], TypeInfo) and \
+           stk[i].meta_type in (MT_structure, MT_class):
+            name = stk[i].name + '::' + name
+            break
+        if isinstance(stk[i], NSInfo) and \
+           stk[i].meta_type == MT_namespace:
+            name = stk[i].name + '::' + name
+            break
+        pass
+    return name
+
+name_flyweight = {}
+def fly_name(name):
+    h = hash(name) & 0xff
+    bucket = name_flyweight.setdefault(h, {})
+    return bucket.setdefault(name, name)
+
+def parse_die_subprogram(die, subprograms_lst, stk):
+    subp = SubpInfo(die.offset, die)
+
+    for attr in die.attributes:
+        _attr = die.attributes[attr]
+        if attr == 'DW_AT_name':
+            name = _attr.value.decode('utf-8')
+            subp.name = fly_name(prepend_namespace(name, stk))
+        elif attr == 'DW_AT_linkage_name':
+            subp.linkage_name = fly_name(_attr.value.decode('utf-8'))
+        elif attr == 'DW_AT_abstract_origin':
+            subp.origin = _attr.value + die.cu.cu_offset
+        elif attr == 'DW_AT_specification':
+            subp.specification = _attr.value + die.cu.cu_offset
+            pass
+        elif attr in origin_attrs:
+            origin = _attr.value + die.cu.cu_offset
+            subp.origin = origin
+            # Need to handle the case that is inside antoher inlined
+            enclosing_caller = find_enclosing_caller(stk)
+            if origin not in enclosing_caller.calls:
+                enclosing_caller.calls.append(origin)
+                pass
+            pass
+        pass
+
+    subprograms_lst.append(subp)
+    if die.has_children:
+        stk.append(subp)
+        pass
+    pass
+
+def parse_die_type(die, types_lst, stk):
+    die_tag = MT_table[die.tag]
+    _type = TypeInfo(die.offset, die_tag)
+    if die_tag in (MT_pointer, MT_const, MT_reference,
+                   MT_rvalue_reference, MT_volatile,
+                   MT_restrict, MT_ptr_to_member):
+        _type.type = 0 # void.addr
+    elif die_tag == MT_enumeration:
+        _type.type = 0 # void.addr
+        pass
+
+    for attr in die.attributes:
+        _attr = die.attributes[attr]
+        if attr == 'DW_AT_name':
+            _type.name = fly_name(prepend_namespace(_attr.value.decode('utf-8'), stk))
+        elif attr == 'DW_AT_linkage__name':
+            _type.linkage_name = fly_name(_attr.value.decode('utf-8'))
+        elif attr == 'DW_AT_type':
+            _type.type = _attr.value + die.cu.cu_offset
+        elif attr == 'DW_AT_declaration':
+            _type.declaration = True
+            pass
+        pass
+
+    types_lst.append(_type)
+    if die.has_children:
+        stk.append(_type)
+        pass
+    pass
+
+def parse_die_member(die, stk):
+    member_def = TypeCommonParam(MT_member)
+    enclosing_type = find_enclosing_type(stk)
+    enclosing_type.choose_params(members=True)
+    enclosing_type.comm_params.append(member_def)
+
+    for attr in die.attributes:
+        _attr = die.attributes[attr]
+        if attr == 'DW_AT_name':
+            member_def.name = fly_name(_attr.value.decode('utf-8'))
+        elif attr == 'DW_AT_linkage_name':
+            member_def.link_age = fly_name(_attr.value.decode('utf-8'))
+        elif attr == 'DW_AT_type':
+            member_def.value = _attr.value + die.cu.cu_offset
+        elif attr == 'DW_AT_data_member_location':
+            member_def.offset = _attr.value
+        elif attr == 'DW_AT_external':
+            member_def.external = True
+            pass
+        pass
+
+    if die.has_children:
+        stk.append(member_def)
+        pass
+    pass
+
+def parse_die_enumerator(die, stk):
+    value_def = TypeCommonParam(MT_enumerator)
+    enclosing_type = find_enclosing_type(stk)
+    enclosing_type.choose_params(values=True)
+    enclosing_type.comm_params.append(value_def)
+
+    for attr in die.attributes:
+        _attr = die.attributes[attr]
+        if attr == 'DW_AT_name':
+            value_def.name = fly_name(_attr.value.decode('utf-8'))
+        elif attr == 'DW_AT_linkage_name':
+            value_def.linkage_name = fly_name(_attr.value.decode('utf-8'))
+        elif attr == 'DW_AT_const_value':
+            value_def.value = _attr.value
+            pass
+        pass
+
+    if die.has_children:
+        stk.append(value_def)
+        pass
+    pass
+
+def parse_die_namespace(die, stk):
+    namespace_def = NSInfo(addr, die)
+
+    for attr in die.attributes:
+        _attr = die.attributes[attr]
+        if attr == 'DW_AT_name':
+            namespace_def.name = fly_name(_attr.value.decode('utf-8'))
+            pass
+        pass
+
+    if die.has_children:
+        stk.append(namespace_def)
+        pass
+    pass
+
+flyweight_tinfo = {}
+def flyweight_type(meta_type):
+    if meta_type in flyweight_tinfo:
+        return flyweight_tinfo[meta_type]
+    flyweight_tinfo[meta_type] = {'meta_type': meta_type}
+    return flyweight_tinfo[meta_type]
+
+def parse_die_call_site(die, stk):
+    enclosing_caller = find_enclosing_caller(stk)
+    for attr in die.attributes:
+        _attr = die.attributes[attr]
+        if attr in origin_attrs:
+            origin = _attr.value + die.cu.cu_offset
+            enclosing_caller = find_enclosing_caller(stk)
+            if origin not in enclosing_caller.calls:
+                enclosing_caller.calls.append(origin)
+                pass
+            pass
+        pass
+
+    if die.has_children:
+        stk.append(flyweight_type(MT_table[die.tag]))
+        pass
+    pass
+
+def parse_die_formal_parameter(die, stk):
+    if not isinstance(stk[-1], TypeInfo) or stk[-1].meta_type != MT_subroutine:
+        return
+
+    for attr in die.attributes:
+        _attr = die.attributes[attr]
+        p = TypeCommonParam(MT_formal_parameter)
+        p.value = _attr.value + die.cu.cu_offset
+        enclosing = stk[-1]
+        enclosing.choose_params(params=True)
+        p.name = str(len(enclosing.comm_params))
+        enclosing.comm_params.append(p)
+        pass
+
+    if die.has_children:
+        stk.append(flyweight_type(MT_formal_parameter))
+        pass
+    pass
+
+def parse_CU(cu, subprograms, types):
     subprograms_lst = []
-    void = TypeInfo(0, MT_base)
-    void.name = 'void'
-    types = {0: void}
     types_lst = []
     stk = []
-    name_flyweight = {}
 
-    def fly_name(name):
-        h = hash(name) & 0xff
-        bucket = name_flyweight.setdefault(h, {})
-        return bucket.setdefault(name, name)
+    for die in cu.iter_DIEs():
+        if not die.tag:
+            stk.pop()
+            continue
+        if die.tag in MT_table:
+            die_tag = MT_table[die.tag]
+        else:
+            die_tag = MT_other
+            pass
+        if die_tag in subprogram_tags:
+            parse_die_subprogram(die, subprograms_lst, stk)
+        elif die_tag in type_tags:
+            parse_die_type(die, types_lst, stk)
+        elif die_tag == MT_member:
+            parse_die_member(die, stk)
+        elif die_tag == MT_enumerator:
+            parse_die_enumerator(die, stk)
+        elif die_tag == MT_namespace:
+            parse_die_namespace(die, stk)
+        elif die_tag in call_site_tags:
+            parse_die_call_site(die, stk)
+        elif die_tag == MT_formal_parameter:
+            parse_die_formal_parameter(die, stk)
+        elif die.has_children:
+            stk.append(flyweight_type(die_tag))
+            pass
+        pass
+
+    subprograms.update((subprog.addr, subprog) for subprog in subprograms_lst)
+    types.update((type.addr, type) for type in types_lst)
 
     def get_real_addr(addr):
         while addr in subprograms:
@@ -353,225 +563,7 @@ def parse_DIEs(lines):
             break
         return addr
 
-    def get_name_addr(addr):
-        while addr in subprograms:
-            subp = subprograms[addr]
-            if not is_original(subp):
-                addr = subp.origin
-                continue
-            return get_symbol_name(subp)
-        print('no name for addr: %x' % addr)
-        raise '<unknown>'
-
-    def tip_tag():
-        if len(stk) == 0:
-            return None
-        tip = stk[-1]
-        if isinstance(tip, (TypeInfo, SubpInfo, TypeCommonParam, NSInfo)):
-            return tip.meta_type
-        return tip['meta_type']
-
-    def prepend_namespace(name):
-        for i in range(len(stk) - 2, -1, -1):
-            if isinstance(stk[i], TypeInfo) and \
-               stk[i].meta_type in (MT_structure, MT_class):
-                name = stk[i].name + '::' + name
-                break
-            if isinstance(stk[i], NSInfo) and \
-               stk[i].meta_type == MT_namespace:
-                name = stk[i].name + '::' + name
-                break
-            pass
-        return name
-
-    for line in lines:
-        dep_addr_die = is_DIE(line)
-        if dep_addr_die:
-            dep, addr, die_str = dep_addr_die
-            if die_str == '0':
-                stk.pop()
-                continue
-            addr = int(addr, 16)
-            if die_str in MT_table:
-                die = MT_table[die_str]
-            else:
-                die = MT_other
-            stk = stk[:dep]
-            if die in subprogram_tags:
-                subp = SubpInfo(addr, die)
-                subprograms_lst.append(subp)
-                stk.append(subp)
-            elif die in type_tags:
-                _type = TypeInfo(addr, die)
-                if die in (MT_pointer, MT_const, MT_reference,
-                           MT_rvalue_reference, MT_volatile,
-                           MT_restrict, MT_ptr_to_member):
-                    _type.type = void.addr
-                elif die == MT_enumeration:
-                    _type.type = void.addr
-                    pass
-                types_lst.append(_type)
-                stk.append(_type)
-                pass
-            elif die == MT_member:
-                member_def = TypeCommonParam(MT_member)
-                stk.append(member_def)
-                enclosing_type = find_enclosing_type(stk)
-                enclosing_type.choose_params(members=True)
-                enclosing_type.comm_params.append(member_def)
-                pass
-            elif die == MT_enumerator:
-                value_def = TypeCommonParam(MT_enumerator)
-                stk.append(value_def)
-                enclosing_type = find_enclosing_type(stk)
-                enclosing_type.choose_params(values=True)
-                enclosing_type.comm_params.append(value_def)
-            elif die == MT_namespace:
-                namespace_def = NSInfo(addr, die)
-                stk.append(namespace_def)
-            else:
-                stk.append({'meta_type': die})
-                pass
-            pass
-        elif tip_tag() == MT_subprogram:
-            attr_value = parse_attr(line)
-            if not attr_value:
-                continue
-            attr, value = attr_value
-            if attr == 'DW_AT_name':
-                subp = stk[-1]
-                name = fly_name(get_name(value))
-                subp.name = prepend_namespace(name)
-                #print(' ' * len(stk), attr, get_name(value))
-            elif attr == 'DW_AT_linkage_name':
-                subp = stk[-1]
-                name = fly_name(get_name(value))
-                subp.linkage_name = name
-            elif attr == 'DW_AT_abstract_origin':
-                subp = stk[-1]
-                abstract_origin = parse_abstract_origin(value)
-                subp.origin = int(abstract_origin, 16)
-            elif attr == 'DW_AT_specification':
-                subp = stk[-1]
-                specification = parse_abstract_origin(value)
-                subp.specification = int(specification, 16)
-                pass
-            pass
-        elif tip_tag() in call_site_tags:
-            attr_value = parse_attr(line)
-            if attr_value:
-                attr, value = attr_value
-                if attr in origin_attrs:
-                    abstract_origin = parse_abstract_origin(value)
-                    if abstract_origin:
-                        enclosing_caller = find_enclosing_caller(stk)
-                        if tip_tag() == MT_inlined_subroutine:
-                            subp = stk[-1]
-                            subp.origin = int(abstract_origin, 16)
-                            pass
-                        if not enclosing_caller:
-                            print('no enclosing caller')
-                            pprint(stk)
-                            raise 'no enclosing caller'
-                        abstract_origin = int(abstract_origin, 16)
-                        if abstract_origin not in enclosing_caller.calls:
-                            enclosing_caller.calls.append(abstract_origin)
-                            pass
-                        pass
-                    pass
-                pass
-            pass
-        elif tip_tag() in type_tags:
-            attr_value = parse_attr(line)
-            if not attr_value:
-                continue
-            attr, value = attr_value
-            _type = stk[-1]
-            if attr == 'DW_AT_name':
-                name = fly_name(prepend_namespace(get_name(value)))
-                _type.name = name
-            elif attr == 'DW_AT_linkage__name':
-                name = fly_name(get_name(value))
-                _type.linkage_name = name
-            elif attr == 'DW_AT_type':
-                _type.type = int(parse_addr_value(value), 16)
-            elif attr == 'DW_AT_declaration':
-                _type.declaration = True
-                pass
-            pass
-        elif tip_tag() == MT_member:
-            attr_value = parse_attr(line)
-            if not attr_value:
-                continue
-            attr, value = attr_value
-            member = find_enclosing_type(stk).comm_params[-1]
-            if attr == 'DW_AT_name':
-                name = fly_name(get_name(value))
-                member.name = name
-            elif attr == 'DW_AT_linkage_name':
-                name = fly_name(get_name(value))
-                member.linkage_name = name
-            elif attr == 'DW_AT_type':
-                member.value = int(parse_addr_value(value), 16)
-            elif attr == 'DW_AT_data_member_location':
-                member.offset = int(value, 16)
-            elif attr == 'DW_AT_external':
-                member.external = True
-                pass
-            pass
-        elif tip_tag() == MT_enumerator:
-            attr_value = parse_attr(line)
-            if not attr_value:
-                continue
-            attr, value = attr_value
-            if attr == 'DW_AT_name':
-                name = fly_name(get_name(value))
-                find_enclosing_type(stk).comm_params[-1].name = name
-            elif attr == 'DW_AT_linkage_name':
-                name = fly_name(get_name(value))
-                find_enclosing_type(stk).comm_params[-1].linkage_name = name
-            elif attr == 'DW_AT_const_value':
-                if value.strip().startswith('0x'):
-                    value = int(value, 16)
-                else:
-                    value = int(value)
-                    pass
-                find_enclosing_type(stk).comm_params[-1].value = value
-                pass
-            pass
-        elif tip_tag() == MT_formal_parameter:
-            if not isinstance(stk[-2], TypeInfo) or stk[-2].meta_type != MT_subroutine:
-                continue
-            attr_value = parse_attr(line)
-            if not attr_value:
-                continue
-            attr, value = attr_value
-            if attr == 'DW_AT_type':
-                type_addr = int(parse_addr_value(value), 16)
-                p = TypeCommonParam(MT_formal_parameter)
-                p.value = type_addr
-                enclosing = find_enclosing_type(stk)
-                enclosing.choose_params(params=True)
-                p.name = str(len(enclosing.comm_params))
-                enclosing.comm_params.append(p)
-                pass
-            pass
-        elif tip_tag() == MT_namespace:
-            attr_value = parse_attr(line)
-            if not attr_value:
-                continue
-            attr, value = attr_value
-            if attr == 'DW_AT_name':
-                name = fly_name(prepend_namespace(get_name(value)))
-                stk[-1].name = name
-                pass
-            pass
-        pass
-
-    subprograms.update((subp.addr, subp) for subp in subprograms_lst)
-    types.update((_type.addr, _type) for _type in types_lst)
-
-    for subp in subprograms.values():
+    for subp in subprograms_lst:
         if not is_original(subp):
             origin = subprograms[get_real_addr(subp.origin)]
             for call in subp.calls:
@@ -592,6 +584,26 @@ def parse_DIEs(lines):
             del subprograms[subp.addr]
             pass
         pass
+
+    assert not stk
+    pass
+
+def parse_DIEs(fo):
+    subprograms = {}
+    void = TypeInfo(0, MT_base)
+    void.name = 'void'
+    types = {0: void}
+
+    elffile = ELFFile(fo)
+    if not elffile.has_dwarf_info():
+        print('no dwarf info')
+        return
+    dwarfinfo = elffile.get_dwarf_info()
+    dwarfinfo.skip_cache()
+    for cu in dwarfinfo.iter_CUs():
+        parse_CU(cu, subprograms, types)
+        pass
+
     return subprograms, types
 
 def make_signature(_type, types):
@@ -1487,9 +1499,9 @@ def main():
     output = opts.output
 
     print('parsing DIEs from %s' % filename, end='', flush=True)
-    lines = open(filename)
+    fo = open(filename, 'rb')
     start_time = time.time()
-    subprograms, types = parse_DIEs(lines)
+    subprograms, types = parse_DIEs(fo)
     print(' - done in %.2f seconds' % (time.time() - start_time))
 
     # Check if the file exists. If yes, delete it.
