@@ -483,9 +483,7 @@ def parse_die_formal_parameter(die, stk):
         pass
     pass
 
-def parse_CU(cu, subprograms, types):
-    subprograms_lst = []
-    types_lst = []
+def parse_CU(cu, subprograms_lst, types_lst):
     stk = []
 
     for die in cu.iter_DIEs():
@@ -516,7 +514,33 @@ def parse_CU(cu, subprograms, types):
             pass
         pass
 
+    assert not stk
+    pass
+
+def parse_DIEs(fo):
+    from collections import deque
+    subprograms = {}
+    subprograms_lst = deque()
+    void = TypeInfo(0, MT_base)
+    void.name = 'void'
+    types = {0: void}
+    types_lst = deque()
+
+    elffile = ELFFile(fo)
+    if not elffile.has_dwarf_info():
+        print('no dwarf info')
+        return
+    dwarfinfo = elffile.get_dwarf_info()
+    if dwarfinfo.skip_cache:
+        dwarfinfo.skip_cache()
+        pass
+    for cu in dwarfinfo.iter_CUs():
+        parse_CU(cu, subprograms_lst, types_lst)
+        pass
+
+    subprograms.fromkeys([subprog.addr for subprog in subprograms_lst])
     subprograms.update((subprog.addr, subprog) for subprog in subprograms_lst)
+    types.fromkeys([t.addr for t in types_lst])
     types.update((type.addr, type) for type in types_lst)
 
     def get_real_addr(addr):
@@ -547,25 +571,6 @@ def parse_CU(cu, subprograms, types):
            subp.meta_type == MT_inlined_subroutine:
             del subprograms[subp.addr]
             pass
-        pass
-
-    assert not stk
-    pass
-
-def parse_DIEs(fo):
-    subprograms = {}
-    void = TypeInfo(0, MT_base)
-    void.name = 'void'
-    types = {0: void}
-
-    elffile = ELFFile(fo)
-    if not elffile.has_dwarf_info():
-        print('no dwarf info')
-        return
-    dwarfinfo = elffile.get_dwarf_info()
-    dwarfinfo.skip_cache()
-    for cu in dwarfinfo.iter_CUs():
-        parse_CU(cu, subprograms, types)
         pass
 
     return subprograms, types
