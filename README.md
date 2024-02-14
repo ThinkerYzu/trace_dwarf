@@ -2,8 +2,7 @@ TraceDwarf is a set of tools to help people to trace function call flows
 with DWARF in the binary files.
 
 ## Build a Database from DWARF
-You need to dump DWARF info into a text file and parse the file with
-mk-dwarf-db.py.
+You need to parse the file with mk-dwarf-db.py.
 
 The following lines build a database for the Linux kernel.
 
