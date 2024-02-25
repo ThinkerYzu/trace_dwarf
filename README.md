@@ -1,22 +1,24 @@
-TraceDwarf is a set of tools to help people to trace function call flows
-with DWARF in the binary files.
+TraceDwarf is a collection of tools designed to assist developers in
+tracing function call flows and relationships of data types using
+DWARF in binary files.
 
 ## Build a Database from DWARF
-You need to parse the file with mk-dwarf-db.py.
+The first step is to create a database from DWARF in binary files. The
+tool being used to build the database is mk-dwarf-db.py.
 
-The following lines build a database for the Linux kernel.
+The lines that follow create a database for the Linux kernel.
 
     mk-dwarf-db.py vmlinux
 
-It generates a database called callgraph.sqlite3.  Now, you can use
-this database to create call flow diagrams.  For sure, you should
-compile your files with DWARF information.
+It creates a database named callgraph.sqlite3. You can now use this
+database to create call flow diagrams. Make sure to compile your files
+with DWARF information.
 
 ## Generate Callflow Diagram
-draw-callflow.py generates dot files to describe the call flow of
-given function names.  You can give more than one function name to
-find all its callers or the callees called by it.  It will follow
-calls to a given level.
+The draw-callflow.py script generates dot files that describe the call
+flow of specified function names. You can provide multiple function
+names to discover all the functions that call them or the functions
+called by them. The script will trace calls up to a specified depth.
 
 For example,
 
@@ -32,15 +34,16 @@ For example,
          -x spin_unlock_bh \
          callgraph.sqlite3
 
-This example will generate a dot file to describe call flows of
-fib6_table_lookup.  '~fib6_table_lookup' asks the tool to trace callers
-while '+fib6_table_lookup' asks this tool to trace callees.
+This example will generate a dot file that describes the call flows of
+fib6_table_lookup. '~fib6_table_lookup' instructs the tool to trace
+callers, while '+fib6_table_lookup' instructs the tool to trace
+callees.
 
-Some functions are not critical and annoying, so we may want to
-ignore them.  With '-x', we follow calls crossing NF_HOOK,
-ip6_route_add ... and spin_unlock_bh.
+Some functions are not essential, so we may consider ignoring
+them. With '-x', we do not follow the calls that cross NF_HOOK,
+ip6_route_add... and spin_unlock_bh.
 
-The following command will generate a PNG file from the dot file.
+The command below will create a PNG file from the DOT file.
 
     dot -Tpng ip6_route_input.dot > ip6_route_input.png
 
@@ -66,11 +69,12 @@ For example,
         -x dst_ops \
         callgraph.sqlite3
 
-This example will generate a dot file to describe how `struct net`
-uses other types.  This tool will find types recursively until no more
-types are found or reach a max number of levels.  Here, it is 5.  Some
-types are too complicated and don't mean much.  We filter it out;
-likes netns_ct, netns_ipv6, ... and dst_ops.
+This example will generate a dot file to describe how the `struct net`
+utilizes other types. This tool will recursively find types until no
+more types are found or until reaching a maximum number of levels,
+which in this case is 5. Some types are too complicated and do not
+provide much meaning, so we filter them out; such as `netns_ct`,
+`netns_ipv6`, and `dst_ops`.
 
 The following command will create a PNG file from the dot file.
 
