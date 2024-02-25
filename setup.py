@@ -23,7 +23,7 @@ setup(
     description='Python tools for parsing DWARF debug information.',
     long_description=description,
     license='BSD',
-    version='0.30',
+    version='0.1',
     author='K.F. Lee',
     maintainer='K.F. Lee',
     author_email='thinker.li@gmail.com',
