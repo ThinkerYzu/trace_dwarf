@@ -1161,7 +1161,7 @@ def init_merge_set_of_types_with_placeholders(subprograms, types, context):
             continue
         # Add the type to the merge set of the name.
         merge_sets[name].add(_type.addr)
-        type_merge_sets[_type.addr] = merge_sets[name]
+        type_merge_sets[_type.addr] = id(merge_sets[name])
         pass
 
     context['merge_sets'] = merge_sets.values()
@@ -1179,7 +1179,7 @@ def divide_merge_set_sig(merge_set, type_merge_sets, types):
             sigs[sig] = set()
             pass
         sigs[sig].add(addr)
-        type_merge_sets[_type.addr] = sigs[sig]
+        type_merge_sets[_type.addr] = id(sigs[sig])
         pass
     return sigs.values()
 
@@ -1211,7 +1211,7 @@ def divide_merge_set_dep(merge_set, type_merge_sets, types):
     for addr in merge_set:
         _type = types[addr]
         dep_sets = find_dependent_merge_sets(_type, type_merge_sets, types)
-        dep = tuple((id(dep_set) for dep_set in dep_sets))
+        dep = hash(tuple(dep_sets))
         if dep not in deps:
             deps[dep] = set()
             pass
@@ -1317,7 +1317,7 @@ def divide_merge_sets_dep(subprograms, types, context):
         # update type_merge_sets
         for merge_set in merge_sets:
             for addr in merge_set:
-                type_merge_sets[addr] = merge_set
+                type_merge_sets[addr] = id(merge_set)
                 pass
             pass
         pass
