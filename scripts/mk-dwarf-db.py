@@ -1211,7 +1211,7 @@ def divide_merge_set_dep(merge_set, type_merge_sets, types):
     for addr in merge_set:
         _type = types[addr]
         dep_sets = find_dependent_merge_sets(_type, type_merge_sets, types)
-        dep = hash(tuple(dep_sets))
+        dep = hash(dep_sets)
         if dep not in deps:
             deps[dep] = set()
             pass
@@ -1256,12 +1256,24 @@ def divide_merge_set_dep(merge_set, type_merge_sets, types):
 def find_dependent_merge_sets(_type, type_merge_sets, types):
     # 1. Set a list of tasks containing only the given type and an empty
     #    list of dependent sets.
-    tasks = [_type]
-    dep_sets = []
+    tasks = [(_type, [])]
     # 2. While the list is not empty:
     while tasks:
         # 2.1. Pop a task from the list.
-        task = tasks.pop()
+        task, ancestors = tasks.pop()
+
+        if task.sig:
+            if task.sig == ':':
+                continue
+            for ancestor in ancestors:
+                if ancestor.sig == ':':
+                    ancestor.sig = task.sig
+                else:
+                    ancestor.sig += task.sig
+                    pass
+                pass
+            continue
+
         # 2.2. If the task is a placeholder, add the merge set of the
         #      placeholder to the list of dependent sets.
         if task.meta_type == MT_placeholder:
@@ -1271,31 +1283,41 @@ def find_dependent_merge_sets(_type, type_merge_sets, types):
             elif task.real_type not in type_merge_sets:
                 print('placeholder real_type doesnot have merge_set')
                 pass
-            dep_sets.append(type_merge_sets[task.real_type])
+            task.sig = '+' + str(type_merge_sets[task.real_type])
+            for ancestor in ancestors:
+                if ancestor.sig == ':':
+                    ancestor.sig = task.sig
+                else:
+                    ancestor.sig += task.sig
+                    pass
+                pass
             continue
+
+        task.sig = ':'
+
         # 2.3. If the task is not a placeholder, add the tasks of the
         #      attributes of the task to the list.
         #      2.3.1. Add the task of the 'type' attribute if it exists.
         if task.type >= 0:
-            tasks.append(types[task.type])
+            tasks.append((types[task.type], ancestors + [task]))
             pass
         #      2.3.2. Add the tasks of the 'members' attribute if it
         #             exists.
         if task.members:
             for member in task.comm_params:
-                tasks.append(types[member.value])
+                tasks.append((types[member.value], ancestors + [task]))
                 pass
             pass
         #      2.3.3. Add the tasks of the 'params' attribute if it
         #             exists.
         if task.params:
             for param in task.comm_params:
-                tasks.append(types[param.value])
+                tasks.append((types[param.value], ancestors + [task]))
                 pass
             pass
         pass
     # 3. Return a list of dependent sets.
-    return dep_sets
+    return _type.sig
 
 # Divide merge sets to subsets of the same dependent merge sets.
 #
@@ -1305,6 +1327,12 @@ def divide_merge_sets_dep(subprograms, types, context):
     merge_sets = context['merge_sets']
     type_merge_sets = context['type_merge_sets']
     while True:
+        # Clear sig of types to reuse the field for caching signatures of
+        # dep_sets.
+        for _type in types.values():
+            _type.sig = ''
+            pass
+
         print('.', end='', flush=True)
         new_merge_sets = []
         for merge_set in merge_sets:
