@@ -456,7 +456,7 @@ def parse_die_enumerator(die, stk):
     pass
 
 def parse_die_namespace(die, stk):
-    namespace_def = NSInfo(addr, die)
+    namespace_def = NSInfo(die.offset, die)
 
     for attr in die.attributes:
         _attr = die.attributes[attr]
