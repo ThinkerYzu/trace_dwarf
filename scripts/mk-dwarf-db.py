@@ -93,6 +93,12 @@ ptr_tags = (MT_pointer, MT_ptr_to_member, MT_reference, MT_rvalue_reference)
 
 @dataclass(slots=True)
 class TypeCommonParam:
+    '''Common parameters for all types
+
+    These parameters can be paramters of a function, values of an
+    enum, and members of a struct.
+
+    '''
     meta_type: int
     name: str = '<unknown>'
     linkage_name: str = ''
@@ -103,6 +109,7 @@ class TypeCommonParam:
 
 @dataclass(slots=True)
 class TypeInfo:
+    '''Type information'''
     addr: int
     meta_type: int
     id: int = -1
@@ -133,6 +140,7 @@ class TypeInfo:
 
 @dataclass(slots=True)
 class SubpInfo:
+    '''Information of a subprogram'''
     addr: int
     meta_type: int
     id: int = -1
@@ -146,57 +154,152 @@ class SubpInfo:
 
 @dataclass(slots=True)
 class NSInfo:
+    '''Information of a namespace'''
     addr: int
     meta_type: int
     name: str = '<unknown>'
     pass
 
-def find_enclosing_caller(stk):
+def find_enclosing_subprog(stk):
+    '''Fint the subprogram that enclose the current context'''
     for i in range(len(stk) - 1, -1, -1):
         if isinstance(stk[i], SubpInfo):
             return stk[i]
     return None
 
 def find_enclosing_type(stk):
+    '''Fint the type that enclose the current context'''
     for i in range(len(stk) - 1, -1, -1):
         if isinstance(stk[i], TypeInfo) and stk[i].meta_type in type_tags:
             return stk[i]
     return None
 
-def init_schema(conn):
-    conn.execute('create table symbols(id integer primary key asc, name text unique)')
-    conn.execute('create table calls(caller integer, callee integer)')
+class CFDB:
+    def __init__(self, conn):
+        self.conn = conn
+        pass
 
-    conn.execute('create table types(id integer primary key asc, name text, addr integer unique, meta_type text, declaration integer)')
-    conn.execute('create table members(type_id integer, name text, type integer, offset integer)')
-    pass
+    def init_schema(self):
+        self.conn.execute('create table symbols(id integer primary key asc, name text unique)')
+        self.conn.execute('create table calls(caller integer, callee integer)')
 
-def insert_symbols(conn, symbols):
-    for symbol in symbols:
-        try:
-            conn.execute('insert into symbols (name) values(?)',
-                         (symbol,))
-        except sqlite3.IntegrityError:
-            #print('symbol %s already exists' % symbol)
+        self.conn.execute('create table types(id integer primary key asc, name text, addr integer unique, meta_type text, declaration integer)')
+        self.conn.execute('create table members(type_id integer, name text, type integer, offset integer)')
+        pass
+
+    def insert_symbols(self, symbols):
+        conn = self.conn
+        for symbol in symbols:
+            try:
+                conn.execute('insert into symbols (name) values(?)',
+                             (symbol,))
+            except sqlite3.IntegrityError:
+                #print('symbol %s already exists' % symbol)
+                pass
             pass
         pass
-    pass
 
-def insert_calls(conn, calls):
-    for caller, callee in calls:
-        conn.execute('insert into calls values(?, ?)',
-                     (caller, callee))
+    def insert_calls(self, calls):
+        conn = self.conn
+        for caller, callee in calls:
+            conn.execute('insert into calls values(?, ?)',
+                         (caller, callee))
+            pass
+        pass
+
+    def get_symbol_id(self, symbol):
+        conn = self.conn
+        cur = conn.execute('select id from symbols where name = ?',
+                           (symbol,))
+        row = cur.fetchone()
+        if not row:
+            print(symbol)
+            pass
+        return row[0]
+
+    def persist_subprogram_info(self, subprograms):
+        subprograms = [subprogram for subprogram in subprograms.values()
+                       if is_original(subprogram)]
+
+        symbols = [get_symbol_name(subprogram)
+               for subprogram in subprograms]
+        self.insert_symbols(symbols)
+
+        self.commit()
+
+        for subp in subprograms:
+            caller = self.get_symbol_id(get_symbol_name(subp))
+            calls = [(caller, self.get_symbol_id(callee))
+                     for callee in subp.call_names]
+            self.insert_calls(calls)
+            pass
+
+        self.commit()
+        pass
+
+    def persist_types_info(self, types):
+        conn = self.conn
+        for addr, type_info in types.items():
+            if type_info.meta_type == MT_placeholder:
+                continue
+            name = get_symbol_name(type_info)
+            meta_type = MT_table_rev[type_info.meta_type]
+            declaration = 1 if type_info.declaration else 0
+            conn.execute('insert into types(name, addr, meta_type, declaration) values(?, ?, ?, ?)',
+                         (name, addr, meta_type, declaration))
+            cur = conn.execute('select id from types where addr = ?',
+                               (addr,))
+            row = cur.fetchone()
+            type_id = row[0]
+            type_info.id = type_id
+            pass
+
+        for type_info in types.values():
+            if type_info.meta_type == MT_placeholder:
+                continue
+            type_id = type_info.id
+            if type_info.members:
+                for member in type_info.comm_params:
+                    conn.execute('insert into members values(?, ?, ?, ?)',
+                                 (type_id, get_symbol_name(member),
+                                  get_real_type(member.value, types).id,
+                                  member.offset or 0))
+                    pass
+                pass
+            if type_info.type >= 0:
+                if type_info.type not in types:
+                    print('unknown type %s' % type_info.type)
+                    print(type_info)
+                    pass
+                type_type = get_real_type(type_info.type, types)
+                if type_type.id < 0:
+                    print(type_info.type, types[type_info.type], type_type)
+                    pass
+                conn.execute('insert into members values(?, ?, ?, ?)',
+                             (type_id, '',
+                              type_type.id,
+                              0))
+                pass
+            if type_info.params:
+                for i, param in enumerate(type_info.comm_params):
+                    conn.execute('insert into members values(?, ?, ?, ?)',
+                                 (type_id, str(i),
+                                  get_real_type(param.value, types).id,
+                                  0))
+                    pass
+                pass
+            pass
+        self.commit()
+        pass
+
+    def commit(self):
+        self.conn.commit()
+        pass
+
+    def close(self):
+        self.conn.close()
         pass
     pass
-
-def get_symbol_id(conn, symbol):
-    cur = conn.execute('select id from symbols where name = ?',
-                       (symbol,))
-    row = cur.fetchone()
-    if not row:
-        print(symbol)
-        pass
-    return row[0]
 
 def is_original(subprogram):
     return subprogram.origin < 0
@@ -206,93 +309,20 @@ def get_symbol_name(symbol):
         return symbol.linkage_name
     return symbol.name
 
-def persist_subprogram_info(conn, subprograms):
-    subprograms = [subprogram for subprogram in subprograms.values()
-                   if is_original(subprogram)]
-
-    symbols = [get_symbol_name(subprogram)
-               for subprogram in subprograms]
-    insert_symbols(conn, symbols)
-
-    conn.commit()
-
-    for subp in subprograms:
-        caller = get_symbol_id(conn, get_symbol_name(subp))
-        calls = [(caller, get_symbol_id(conn, callee))
-                 for callee in subp.call_names]
-        insert_calls(conn, calls)
-        pass
-
-    conn.commit()
-    pass
-
 def get_real_type(addr, types):
     if types[addr].meta_type == MT_placeholder:
         return types[types[addr].real_type]
     return types[addr]
 
-def persist_types_info(conn, types):
-    for addr, type_info in types.items():
-        if type_info.meta_type == MT_placeholder:
-            continue
-        name = get_symbol_name(type_info)
-        meta_type = MT_table_rev[type_info.meta_type]
-        declaration = 1 if type_info.declaration else 0
-        conn.execute('insert into types(name, addr, meta_type, declaration) values(?, ?, ?, ?)',
-                     (name, addr, meta_type, declaration))
-        cur = conn.execute('select id from types where addr = ?',
-                           (addr,))
-        row = cur.fetchone()
-        type_id = row[0]
-        type_info.id = type_id
-        pass
-
-    for type_info in types.values():
-        if type_info.meta_type == MT_placeholder:
-            continue
-        type_id = type_info.id
-        if type_info.members:
-            for member in type_info.comm_params:
-                conn.execute('insert into members values(?, ?, ?, ?)',
-                             (type_id, get_symbol_name(member),
-                              get_real_type(member.value, types).id,
-                              member.offset or 0))
-                pass
-            pass
-        if type_info.type >= 0:
-            if type_info.type not in types:
-                print('unknown type %s' % type_info.type)
-                print(type_info)
-                pass
-            type_type = get_real_type(type_info.type, types)
-            if type_type.id < 0:
-                print(type_info.type, types[type_info.type], type_type)
-                pass
-            conn.execute('insert into members values(?, ?, ?, ?)',
-                         (type_id, '',
-                          type_type.id,
-                          0))
-            pass
-        if type_info.params:
-            for i, param in enumerate(type_info.comm_params):
-                conn.execute('insert into members values(?, ?, ?, ?)',
-                             (type_id, str(i),
-                              get_real_type(param.value, types).id,
-                              0))
-                pass
-            pass
-        pass
-    conn.commit()
-    pass
-
 def persist_info(subprograms, types, filename):
     conn = sqlite3.connect(filename)
+    db = CFDB(conn)
 
-    init_schema(conn)
-    persist_subprogram_info(conn, subprograms)
-    persist_types_info(conn, types)
+    db.init_schema()
+    db.persist_subprogram_info(subprograms)
+    db.persist_types_info(types)
 
-    conn.close()
+    db.close()
     pass
 
 def prepend_namespace(name, stk):
@@ -333,7 +363,7 @@ def parse_die_subprogram(die, subprograms_lst, stk):
             origin = _attr.value + die.cu.cu_offset
             subp.origin = origin
             # Need to handle the case that is inside antoher inlined
-            enclosing_caller = find_enclosing_caller(stk)
+            enclosing_caller = find_enclosing_subprog(stk)
             if origin not in enclosing_caller.calls:
                 enclosing_caller.calls.append(origin)
                 pass
@@ -447,12 +477,12 @@ def flyweight_type(meta_type):
     return flyweight_tinfo[meta_type]
 
 def parse_die_call_site(die, stk):
-    enclosing_caller = find_enclosing_caller(stk)
+    enclosing_caller = find_enclosing_subprog(stk)
     for attr in die.attributes:
         _attr = die.attributes[attr]
         if attr in origin_attrs:
             origin = _attr.value + die.cu.cu_offset
-            enclosing_caller = find_enclosing_caller(stk)
+            enclosing_caller = find_enclosing_subprog(stk)
             if origin not in enclosing_caller.calls:
                 enclosing_caller.calls.append(origin)
                 pass
