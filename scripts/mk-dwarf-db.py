@@ -126,6 +126,7 @@ class TypeInfo:
     visited: int = -1
     chosen: bool = False
     to_loop_head: bool = False
+    sig: str = ''
     def choose_params(self, members=False, values=False, params=False):
         if int(members) + int(values) + int(params) != 1:
             raise ValueError('Only one of members, values, params can be True')
@@ -636,7 +637,10 @@ def make_signature(_type, types):
         pass
     return sig
 
-def make_sig_recur(_type, types, lvl=0):
+def make_sig_recur_(_type, types, lvl=0):
+    if _type.sig:
+        return _type.sig
+
     if lvl == 200:
         raise 'too deep'
     if _type.meta_type == MT_placeholder:
@@ -651,11 +655,11 @@ def make_sig_recur(_type, types, lvl=0):
         sig = MT_table_rev[_type.meta_type] + ' ' + get_symbol_name(_type)
         pass
     if _type.type >= 0:
-        sig += ' ' + make_sig_recur(types[_type.type], types, lvl+1)
+        sig += ' ' + make_sig_recur_(types[_type.type], types, lvl+1)
     if _type.members:
         sig += ' {'
         sig += ','.join([get_symbol_name(member) + ':' +
-                         make_sig_recur(types[member.value], types, lvl+1)
+                         make_sig_recur_(types[member.value], types, lvl+1)
                          for member in _type.comm_params])
         sig += '}'
     if _type.values:
@@ -665,14 +669,18 @@ def make_sig_recur(_type, types, lvl=0):
         sig += '}'
     if _type.params:
         sig += '('
-        sig += ','.join([make_sig_recur(types[param.value], types, lvl+1)
+        sig += ','.join([make_sig_recur_(types[param.value], types, lvl+1)
                          for param in _type.comm_params])
         sig += ')'
         pass
 
-    if lvl == 0:
-        sig = hashlib.sha256(sig.encode('utf-8')).hexdigest()
-        pass
+    sig = hashlib.sha256(sig.encode('utf-8')).hexdigest()
+    _type.sig = sig
+
+    return sig
+
+def make_sig_recur(_type, types):
+    sig = make_sig_recur_(_type, types)
     return sig
 
 # Break the circular reference
