@@ -1217,19 +1217,6 @@ def divide_merge_set_dep(merge_set, type_merge_sets, types):
             pass
         deps[dep].add(addr)
         pass
-    if len(deps) > 1:
-        cnt = 0
-        for dep, addrs in deps.items():
-            for addr in addrs:
-                _type = types[addr]
-                if get_symbol_name(_type) == 'pnp_driver':
-                    cnt += 1
-                    break
-                pass
-            pass
-        if cnt >= 2:
-            print('deps', deps, cnt)
-            pass
     return deps.values()
 
 # Find the dependent merge sets of a type.
