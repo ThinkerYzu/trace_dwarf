@@ -151,6 +151,9 @@ class SubpInfo:
     linkage_name: str = ''
     calls: List[int] = field(default_factory=list)
     call_names: List[str] = field(default_factory=list)
+
+    def is_original(self):
+        return self.origin < 0
     pass
 
 @dataclass(slots=True)
@@ -182,7 +185,7 @@ class CFDB:
 
     def init_schema(self):
         self.conn.execute('create table symbols(id integer primary key asc, name text unique)')
-        self.conn.execute('create table calls(caller integer, callee integer)')
+        self.conn.execute('create table calls(caller integer, callee integer, unique(caller, callee))')
 
         self.conn.execute('create table types(id integer primary key asc, name text, addr integer unique, meta_type text, declaration integer)')
         self.conn.execute('create table members(type_id integer, name text, type integer, offset integer)')
@@ -203,8 +206,12 @@ class CFDB:
     def insert_calls(self, calls):
         conn = self.conn
         for caller, callee in calls:
-            conn.execute('insert into calls values(?, ?)',
-                         (caller, callee))
+            try:
+                conn.execute('insert into calls values(?, ?)',
+                             (caller, callee))
+            except sqlite3.IntegrityError:
+                #print('call %d -> %d already exists' % (caller, callee))
+                pass
             pass
         pass
 
@@ -219,16 +226,13 @@ class CFDB:
         return row[0]
 
     def persist_subprogram_info(self, subprograms):
-        subprograms = [subprogram for subprogram in subprograms.values()
-                       if is_original(subprogram)]
-
         symbols = [get_symbol_name(subprogram)
-               for subprogram in subprograms]
+                   for subprogram in subprograms.values()]
         self.insert_symbols(symbols)
 
         self.commit()
 
-        for subp in subprograms:
+        for subp in subprograms.values():
             caller = self.get_symbol_id(get_symbol_name(subp))
             calls = [(caller, self.get_symbol_id(callee))
                      for callee in subp.call_names]
@@ -302,9 +306,6 @@ class CFDB:
         pass
     pass
 
-def is_original(subprogram):
-    return subprogram.origin < 0
-
 def get_symbol_name(symbol):
     if symbol.linkage_name:
         return symbol.linkage_name
@@ -346,7 +347,8 @@ def fly_name(name):
     return bucket.setdefault(name, name)
 
 def parse_die_subprogram(die, subprograms_lst, stk):
-    subp = SubpInfo(die.offset, die)
+    die_tag = MT_table[die.tag]
+    subp = SubpInfo(die.offset, die_tag)
 
     for attr in die.attributes:
         _attr = die.attributes[attr]
@@ -369,6 +371,11 @@ def parse_die_subprogram(die, subprograms_lst, stk):
                 enclosing_caller.calls.append(origin)
                 pass
             pass
+        pass
+
+    if subp.meta_type == MT_inlined_subroutine:
+        enclosing_caller = find_enclosing_subprog(stk)
+        enclosing_caller.calls.append(subp.addr)
         pass
 
     subprograms_lst.append(subp)
@@ -576,14 +583,14 @@ def parse_DIEs(fo):
 
     def get_real_addr(addr):
         while addr in subprograms:
-            if not is_original(subprograms[addr]):
+            if not subprograms[addr].is_original():
                 addr = subprograms[addr].origin
                 continue
             break
         return addr
 
     for subp in subprograms_lst:
-        if not is_original(subp):
+        if not subp.is_original():
             origin = subprograms[get_real_addr(subp.origin)]
             for call in subp.calls:
                 if call in origin.calls:
@@ -595,12 +602,6 @@ def parse_DIEs(fo):
             if subp.name == '<unknown>':
                 subp.name += hex(subp.addr)[2:]
                 pass
-            pass
-        pass
-    for subp in subprograms_lst:
-        if (not is_original(subp)) and \
-           subp.meta_type == MT_inlined_subroutine:
-            del subprograms[subp.addr]
             pass
         pass
 
@@ -1404,10 +1405,34 @@ def set_call_names(subprograms, types, context):
     for subp in subprograms.values():
         if not subp.calls:
             continue
-        if not is_original(subp):
-            continue
         subp.call_names = [get_symbol_name(subprograms[callee])
                            for callee in set(subp.calls)]
+        pass
+    pass
+
+def merge_call_names_to_original(subprograms, types, context):
+    for subp in subprograms.values():
+        if subp.is_original():
+            continue
+        origin = subp
+        while not origin.is_original():
+            origin = subprograms[origin.origin]
+            pass
+        for call in subp.call_names:
+            if call not in origin.call_names:
+                origin.call_names.append(call)
+                pass
+            pass
+        pass
+    pass
+
+def remove_not_original(subprograms, types, context):
+    addrs = [subp.addr for subp in subprograms.values()]
+    for addr in addrs:
+        subp = subprograms[addr]
+        if not subp.is_original():
+            del subprograms[addr]
+            pass
         pass
     pass
 
@@ -1495,6 +1520,8 @@ type_process_phases = [
     redirect_calls_to_origin,
     borrow_name_from_specification,
     set_call_names,
+    merge_call_names_to_original,
+    remove_not_original,
 
     replace_declaration_refs,
     remove_external_members,
