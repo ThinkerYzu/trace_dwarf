@@ -68,15 +68,15 @@ class CallflowTree:
         self.to_callee = to_callee
         pass
 
-    def draw(self, out):
+    def draw(self, out, hist):
         if self.to_callee:
-            self.draw_to_callee(out)
+            self.draw_to_callee(out, hist)
         else:
-            self.draw_to_caller(out)
+            self.draw_to_caller(out, hist)
             pass
         pass
 
-    def draw_to_callee(self, out):
+    def draw_to_callee(self, out, hist):
         tasks = [self.root]
         has_label = set()
         visited = set()
@@ -90,6 +90,9 @@ class CallflowTree:
                 has_label.add(node.name)
                 pass
             for child in node.children:
+                if (node.name, child.name) in hist:
+                    continue
+                hist.add((node.name, child.name))
                 if child.name not in has_label and child.extra_label:
                     out.write('"%s" [%s];\n' % (child.name, ','.join(child.extra_label)))
                     has_label.add(child.name)
@@ -104,7 +107,7 @@ class CallflowTree:
             pass
         pass
 
-    def draw_to_caller(self, out):
+    def draw_to_caller(self, out, hist):
         tasks = [self.root]
         has_label = set()
         visited = set()
@@ -122,6 +125,9 @@ class CallflowTree:
                     out.write('"%s" [%s];\n' % (child.name, ','.join(child.extra_label)))
                     has_label.add(child.name)
                     pass
+                if (node.name, child.name) in hist:
+                    continue
+                hist.add((node.name, child.name))
                 if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
                     out.write('"%s" -> "%s" [color=red,weight=2];\n' % (child.name, node.name))
                 else:
@@ -250,9 +256,10 @@ def main():
         tries.append(tree)
         pass
 
+    draw_hist = set()
     out.write("digraph callflow {\n")
     for tree in tries:
-        tree.draw(out)
+        tree.draw(out, draw_hist)
         pass
     out.write("}\n")
     pass
