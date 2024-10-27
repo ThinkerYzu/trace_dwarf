@@ -569,7 +569,7 @@ def parse_DIEs(fo):
         print('no dwarf info')
         return
     dwarfinfo = elffile.get_dwarf_info()
-    if dwarfinfo.skip_cache:
+    if hasattr(dwarfinfo, 'skip_cache'):
         dwarfinfo.skip_cache()
         pass
     for cu in dwarfinfo.iter_CUs():
