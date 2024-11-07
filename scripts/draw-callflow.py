@@ -4,6 +4,7 @@
 #
 # Usage: draw-callflow.py [-f <+caller|~callee>] [-n <levels>]
 #                         [-x <exclude-symbol>]
+#                         [-r <removed-symbol>]
 #                         [-L <symbol>]
 #                         [-o <output-file>] <database>
 #
@@ -13,6 +14,8 @@
 #   -n <levels>           Number of levels to follow.
 #   -x <exclude-symbol>   Exclude the specified symbol. Stop following the
 #                         symbol.
+#   -r <exclude-symbol>   Remove the specified symbol. Stop following the
+#                         symbol and remove the edges to the symbol.
 #   -L <symbol>           Hightlight the specified symbol.
 #   -o <output-file>      Output file name. If not specified, output to stdout.
 #
@@ -139,7 +142,8 @@ class CallflowTree:
         pass
     pass
 
-def create_callflow_tree(conn, name, levels, exclude, highlight, to_callee):
+def create_callflow_tree(conn, name, levels, exclude, remove,
+                         highlight, to_callee):
     id = conn.execute("SELECT id FROM symbols WHERE name = ?",
                       (name,)).fetchone()[0]
     tree = CallflowTree(id, name, to_callee)
@@ -164,6 +168,8 @@ def create_callflow_tree(conn, name, levels, exclude, highlight, to_callee):
             child_name = \
                 conn.execute("SELECT name FROM symbols WHERE id = ?",
                              (callee_or_caller,)).fetchone()[0]
+            if child_name in remove:
+                continue
             if child_name in tree.symbols:
                 node = tree.symbols[child_name]
                 new_node = False
@@ -187,7 +193,7 @@ def create_callflow_tree(conn, name, levels, exclude, highlight, to_callee):
 
 def usage():
     print("Usage: %s [-f <+caller|-callee>] [-n <levels>]" % sys.argv[0])
-    print("          [-x <exclude-symbol>] [-o <output-file>] <database>")
+    print("          [-x <exclude-symbol>] [-r <remove-symbol>] [-o <output-file>] <database>")
     print("        [-o <output-file>] <database>")
     sys.exit(1)
     pass
@@ -202,6 +208,9 @@ def main():
     parser.add_option("-x", "--exclude", dest="exclude", action="append",
                         help="Exclude the specified symbol. Stop following the "
                         "symbol.")
+    parser.add_option("-r", "--remove", dest="remove", action="append",
+                        help="Remove the specified symbol. Stop following the "
+                        "symbol and remove the edges to it.")
     parser.add_option("-L", "--highlight", dest="highlight", action="append",
                       help="Hightlight the specified symbol.")
     parser.add_option("-o", "--output", dest="output",
@@ -224,6 +233,10 @@ def main():
         options.exclude = []
         pass
 
+    if options.remove is None:
+        options.remove = []
+        pass
+
     if options.highlight is None:
         options.highlight = []
         pass
@@ -242,12 +255,14 @@ def main():
             tree = create_callflow_tree(conn, follow[1:],
                                         options.levels,
                                         options.exclude,
+                                        options.remove,
                                         options.highlight,
                                         True)
         elif follow.startswith("~"):
             tree = create_callflow_tree(conn, follow[1:],
                                         options.levels,
                                         options.exclude,
+                                        options.remove,
                                         options.highlight,
                                         False)
         else:
