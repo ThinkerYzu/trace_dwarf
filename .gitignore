@@ -1,0 +1,8 @@
+web-app/venv/
+__pycache__
+web-app/.env
+build/
+dist/
+trace_dwarf.egg-info/
+trace_dwarf/target_examples/
+*~
