@@ -35,5 +35,6 @@ setup(
     install_requires=["pyelftools >= 0.30"],
     scripts=['scripts/mk-dwarf-db.py',
              'scripts/draw-callflow.py',
+             'scripts/draw-compile-units.py',
              'scripts/draw-types.py'],
 )
