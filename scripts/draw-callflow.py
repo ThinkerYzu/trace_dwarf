@@ -22,7 +22,7 @@
 # You can specify multiple -f options to follow multiple call paths.
 #
 # Example:
-#   draw-callflow.py -f +caller -f -callee -n 2 -o callflow.dot my-database
+#   draw-callflow.py -f +caller -f ~callee -n 2 -o callflow.dot my-database
 #
 # This will draw a call flow graph with two levels of callers and two levels of
 # callees.
