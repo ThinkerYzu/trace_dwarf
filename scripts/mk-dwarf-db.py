@@ -155,6 +155,8 @@ class SubpInfo:
     calls: List[int] = field(default_factory=list)
     call_names: List[str] = field(default_factory=list)
     cu_name: str = ''
+    low_pc: int = -1
+    inline: bool = False
 
     def is_original(self):
         return self.origin < 0
@@ -208,6 +210,12 @@ class CFDB:
             pass
         pass
 
+    def update_symbol_cu(self, symbol, cu_id):
+        conn = self.conn
+        conn.execute('update symbols set cu = ? where name = ?',
+                     (cu_id, symbol))
+        pass
+
     def insert_compile_units(self, compile_units):
         conn = self.conn
         for cu in compile_units:
@@ -259,6 +267,11 @@ class CFDB:
                     self.get_compile_unit_id(subprogram.cu_name))
                    for subprogram in subprograms.values()]
         self.insert_symbols(symbols)
+        for subp in subprograms.values():
+            if subp.low_pc > -1:
+                self.update_symbol_cu(get_symbol_name(subp), self.get_compile_unit_id(subp.cu_name))
+                pass
+            pass
 
         self.commit()
 
@@ -394,6 +407,10 @@ def parse_die_subprogram(die, subprograms_lst, stk):
         elif attr == 'DW_AT_specification':
             subp.specification = _attr.value + die.cu.cu_offset
             pass
+        elif attr == 'DW_AT_low_pc':
+            subp.low_pc = _attr.value
+        elif attr == 'DW_AT_inline':
+            subp.inline = True
         elif attr in origin_attrs:
             origin = _attr.value + die.cu.cu_offset
             subp.origin = origin
