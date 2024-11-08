@@ -10,6 +10,7 @@ from pprint import pprint
 from dataclasses import dataclass, field
 from typing import List
 from elftools.elf.elffile import ELFFile
+from collections import deque
 
 origin_attrs = ('DW_AT_abstract_origin', 'DW_AT_call_origin')
 
@@ -39,6 +40,7 @@ MT_member = 22
 MT_enumerator = 23
 MT_formal_parameter = 24
 MT_namespace = 25
+MT_compile_unit = 26
 
 MT_table = {
     'DW_TAG_array_type': MT_array,
@@ -66,6 +68,7 @@ MT_table = {
     'DW_TAG_enumerator': MT_enumerator,
     'DW_TAG_formal_parameter': MT_formal_parameter,
     'DW_TAG_namespace': MT_namespace,
+    'DW_TAG_compile_unit': MT_compile_unit,
 }
 
 MT_table_rev = {v: k for k, v in MT_table.items()}
@@ -151,6 +154,7 @@ class SubpInfo:
     linkage_name: str = ''
     calls: List[int] = field(default_factory=list)
     call_names: List[str] = field(default_factory=list)
+    cu_name: str = ''
 
     def is_original(self):
         return self.origin < 0
@@ -184,24 +188,44 @@ class CFDB:
         pass
 
     def init_schema(self):
-        self.conn.execute('create table symbols(id integer primary key asc, name text unique)')
+        self.conn.execute('create table symbols(id integer primary key asc, name text unique, cu integer)')
         self.conn.execute('create table calls(caller integer, callee integer, unique(caller, callee))')
 
         self.conn.execute('create table types(id integer primary key asc, name text, addr integer unique, meta_type text, declaration integer)')
         self.conn.execute('create table members(type_id integer, name text, type integer, offset integer)')
+        self.conn.execute('create table compile_units(id integer primary key asc, name text unique)')
         pass
 
     def insert_symbols(self, symbols):
         conn = self.conn
-        for symbol in symbols:
+        for symbol, cu_id in symbols:
             try:
-                conn.execute('insert into symbols (name) values(?)',
-                             (symbol,))
+                conn.execute('insert into symbols (name, cu) values(?, ?)',
+                             (symbol, cu_id))
             except sqlite3.IntegrityError:
                 #print('symbol %s already exists' % symbol)
                 pass
             pass
         pass
+
+    def insert_compile_units(self, compile_units):
+        conn = self.conn
+        for cu in compile_units:
+            try:
+                conn.execute('insert into compile_units(name) values(?)',
+                             (cu,))
+            except sqlite3.IntegrityError:
+                #print('compile unit %s already exists' % cu)
+                pass
+            pass
+        pass
+
+    def get_compile_unit_id(self, cu):
+        conn = self.conn
+        cur = conn.execute('select id from compile_units where name = ?',
+                           (cu,))
+        row = cur.fetchone()
+        return row[0]
 
     def insert_calls(self, calls):
         conn = self.conn
@@ -225,8 +249,14 @@ class CFDB:
             pass
         return row[0]
 
+    def persist_compile_units(self, compile_units):
+        self.insert_compile_units(compile_units)
+        self.commit()
+        pass
+
     def persist_subprogram_info(self, subprograms):
-        symbols = [get_symbol_name(subprogram)
+        symbols = [(get_symbol_name(subprogram),
+                    self.get_compile_unit_id(subprogram.cu_name))
                    for subprogram in subprograms.values()]
         self.insert_symbols(symbols)
 
@@ -321,6 +351,8 @@ def persist_info(subprograms, types, filename):
     db = CFDB(conn)
 
     db.init_schema()
+    cu_names = set([subprogram.cu_name for subprogram in subprograms.values()])
+    db.persist_compile_units(cu_names)
     db.persist_subprogram_info(subprograms)
     db.persist_types_info(types)
 
@@ -523,6 +555,8 @@ def parse_die_formal_parameter(die, stk):
 
 def parse_CU(cu, subprograms_lst, types_lst):
     stk = []
+    cu_name = ''
+    tmp_subprograms_lst = deque()
 
     for die in cu.iter_DIEs():
         if not die.tag:
@@ -534,7 +568,7 @@ def parse_CU(cu, subprograms_lst, types_lst):
             die_tag = MT_other
             pass
         if die_tag in subprogram_tags:
-            parse_die_subprogram(die, subprograms_lst, stk)
+            parse_die_subprogram(die, tmp_subprograms_lst, stk)
         elif die_tag in type_tags:
             parse_die_type(die, types_lst, stk)
         elif die_tag == MT_member:
@@ -547,16 +581,27 @@ def parse_CU(cu, subprograms_lst, types_lst):
             parse_die_call_site(die, stk)
         elif die_tag == MT_formal_parameter:
             parse_die_formal_parameter(die, stk)
+        elif die_tag == MT_compile_unit:
+            for attr in die.attributes:
+                if attr == 'DW_AT_name':
+                    cu_name = die.attributes[attr].value.decode('utf-8')
+                    pass
+                pass
+            stk.append(flyweight_type(die_tag))
         elif die.has_children:
             stk.append(flyweight_type(die_tag))
             pass
         pass
 
+    for subp in tmp_subprograms_lst:
+        subp.cu_name = cu_name
+        pass
+    subprograms_lst.extend(tmp_subprograms_lst)
+
     assert not stk
     pass
 
 def parse_DIEs(fo):
-    from collections import deque
     subprograms = {}
     subprograms_lst = deque()
     void = TypeInfo(0, MT_base)
