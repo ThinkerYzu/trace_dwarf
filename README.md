@@ -80,6 +80,22 @@ The following command will create a PNG file from the dot file.
 
     dot -Tpng net.dot > net.png
 
+## Generate Compile Unit Diagram
+draw-compile-units.py generates dot files to describe the dependencies
+of compile units. A compile unit is usually a source file; for
+example, a .c file. Compile unit diagrams can help us the structure of
+a source repository at compile unit level.
+
+Here is an example,
+
+    draw-compile-units.py -o sysfs_btf.dot \
+        -n 2 \
+        -f ~kernel/bpf/sysfs_bpf.c \
+        callgraph.sqlite3
+
+This command will generate a dot file to describe compile units that
+call functions provided by "sysfs_btf.c".
+
 ## Highlights
 You can highlight functions or types by using '-L <symbol>' option.
 A highlighted function or type will be in red.
