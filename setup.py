@@ -36,5 +36,6 @@ setup(
     scripts=['scripts/mk-dwarf-db.py',
              'scripts/draw-callflow.py',
              'scripts/draw-compile-units.py',
-             'scripts/draw-types.py'],
+             'scripts/draw-types.py',
+             'scripts/list-cu-calls.py'],
 )
