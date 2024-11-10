@@ -16,7 +16,7 @@
 #                         symbol.
 #   -r <exclude-symbol>   Remove the specified symbol. Stop following the
 #                         symbol and remove the edges to the symbol.
-#   -L <symbol>           Hightlight the specified symbol.
+#   -L <symbol>           Highlight the specified symbol.
 #   -o <output-file>      Output file name. If not specified, output to stdout.
 #
 # You can specify multiple -f options to follow multiple call paths.
@@ -100,7 +100,7 @@ class CallflowTree:
                     out.write('"%s" [%s];\n' % (child.name, ','.join(child.extra_label)))
                     has_label.add(child.name)
                     pass
-                if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
+                if hasattr(node, 'highlight') and hasattr(child, 'highlight'):
                     out.write('"%s" -> "%s" [color=red,weight=2];\n' % (node.name, child.name))
                 else:
                     out.write('"%s" -> "%s";\n' % (node.name, child.name))
@@ -131,7 +131,7 @@ class CallflowTree:
                 if (node.name, child.name) in hist:
                     continue
                 hist.add((node.name, child.name))
-                if hasattr(node, 'hightlight') and hasattr(child, 'hightlight'):
+                if hasattr(node, 'highlight') and hasattr(child, 'highlight'):
                     out.write('"%s" -> "%s" [color=red,weight=2];\n' % (child.name, node.name))
                 else:
                     out.write('"%s" -> "%s";\n' % (child.name, node.name))
@@ -147,9 +147,9 @@ def create_callflow_tree(conn, name, levels, exclude, remove,
     id = conn.execute("SELECT id FROM symbols WHERE name = ?",
                       (name,)).fetchone()[0]
     tree = CallflowTree(id, name, to_callee)
-    if tree.root.is_in_set(highlight):
+    if tree.root.is_in_set(highlight) and not hasattr(tree.root, 'highlight'):
         tree.root.extra_label.append('color=red')
-        tree.root.hightlight = True
+        tree.root.highlight = True
         pass
     tasks = [(name, levels)]
     while tasks:
@@ -179,8 +179,10 @@ def create_callflow_tree(conn, name, levels, exclude, remove,
                 new_node = True
                 pass
             if node.is_in_set(highlight):
-                node.extra_label.append('color=red')
-                node.hightlight = True
+                if not hasattr(node, 'highlight'):
+                    node.extra_label.append('color=red')
+                    node.highlight = True
+                    pass
                 pass
             if tree.symbols[name].add_non_existing_child(node) \
                and new_node \
@@ -212,7 +214,7 @@ def main():
                         help="Remove the specified symbol. Stop following the "
                         "symbol and remove the edges to it.")
     parser.add_option("-L", "--highlight", dest="highlight", action="append",
-                      help="Hightlight the specified symbol.")
+                      help="Highlight the specified symbol.")
     parser.add_option("-o", "--output", dest="output",
                       help="Output file name. If not specified, output to stdout.")
     (options, args) = parser.parse_args()
