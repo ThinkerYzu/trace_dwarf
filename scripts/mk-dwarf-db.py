@@ -190,11 +190,15 @@ class CFDB:
         pass
 
     def init_schema(self):
+        # All functions (subprograms). The name "symbols" is misleading.
         self.conn.execute('create table symbols(id integer primary key asc, name text unique, cu integer)')
+        # Calls between functions
         self.conn.execute('create table calls(caller integer, callee integer, unique(caller, callee))')
-
+        # Types
         self.conn.execute('create table types(id integer primary key asc, name text, addr integer unique, meta_type text, declaration integer)')
+        # Members of a type. "type_id" is the id in the "types" table.
         self.conn.execute('create table members(type_id integer, name text, type integer, offset integer)')
+        # Compile units. "cu" in symbols table is the key to this table.
         self.conn.execute('create table compile_units(id integer primary key asc, name text unique)')
         pass
 
