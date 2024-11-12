@@ -107,5 +107,10 @@ A highlighted function or type will be in red.
  - pyelftools
  - dot (graphviz)
 
+## DB Schema
+
+Check the function `CFDB.init_schema` in `mk-dwarf-db.py`.
+
 ## TODOs
-Improve the performance of mk-dwarf-db.py.
+Provide variable information.
+
