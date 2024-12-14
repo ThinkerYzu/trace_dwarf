@@ -47,6 +47,17 @@ The command below will create a PNG file from the DOT file.
 
     dot -Tpng ip6_route_input.dot > ip6_route_input.png
 
+draw-callflow.py also generate callflow between two functions.
+For example,
+
+    draw-callflow.py -o ffs_write_bstrategy.dot \
+        -n 5 \
+        -t ffs_write:bstrategy \
+        callgraph.sqlite3
+
+This example will generate a dot file that describes the calls from
+the function 'ffs_write' to the function 'bstrategy'.
+
 ## Generate Type Diagram
 draw-types.py generates dot files to describe the structure of types
 related to the given type names.
