@@ -64,6 +64,13 @@ class CallflowNode:
 
     def is_in_set(self, set):
         return self.name in set or '@' + str(self.id) in set
+
+    def mark_as_highlight(self):
+        if not hasattr(self, 'highlight'):
+            self.extra_label.append('color=red')
+            self.highlight = True
+            pass
+        pass
     pass
 
 class CallflowTree:
@@ -149,9 +156,8 @@ def create_callflow_tree(conn, name, levels, exclude, remove,
     id = conn.execute("SELECT id FROM symbols WHERE name = ?",
                       (name,)).fetchone()[0]
     tree = CallflowTree(id, name, to_callee)
-    if tree.root.is_in_set(highlight) and not hasattr(tree.root, 'highlight'):
-        tree.root.extra_label.append('color=red')
-        tree.root.highlight = True
+    if tree.root.is_in_set(highlight):
+        tree.root.mark_as_highlight()
         pass
     tasks = [(name, levels)]
     while tasks:
@@ -181,10 +187,7 @@ def create_callflow_tree(conn, name, levels, exclude, remove,
                 new_node = True
                 pass
             if node.is_in_set(highlight):
-                if not hasattr(node, 'highlight'):
-                    node.extra_label.append('color=red')
-                    node.highlight = True
-                    pass
+                node.mark_as_highlight()
                 pass
             if tree.symbols[name].add_non_existing_child(node) \
                and new_node \
@@ -216,9 +219,8 @@ def create_callflow_tree_target(conn, source, target, levels, highlight):
     tgt_id = conn.execute("SELECT id FROM symbols WHERE name = ?",
                             (target,)).fetchone()[0]
     tree = CallflowTree(src_id, source, True)
-    if tree.root.is_in_set(highlight) and not hasattr(tree.root, 'highlight'):
-        tree.root.extra_label.append('color=red')
-        tree.root.highlight = True
+    if tree.root.is_in_set(highlight):
+        tree.root.mark_as_highlight()
         pass
     tasks = [([source], levels)]
     while tasks:
@@ -252,10 +254,7 @@ def create_callflow_tree_target(conn, source, target, levels, highlight):
                         tree.symbols[child_name] = node
                         pass
                     if node.is_in_set(highlight):
-                        if not hasattr(node, 'highlight'):
-                            node.extra_label.append('color=red')
-                            node.highlight = True
-                            pass
+                        node.mark_as_highlight()
                         pass
                     parent_node.add_non_existing_child(node)
                     pass
